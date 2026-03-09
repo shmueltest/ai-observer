@@ -18,21 +18,25 @@ def get_nocookie_url(input_url):
 def download_video(video_url):
     target_url = get_nocookie_url(video_url)
     
+def download_video(url):
     ydl_opts = {
-        # 'web_embedded' is the 2026 "Secret Sauce" for bypassing 403 blocks
-        'format': 'best[ext=mp4]',
-        'outtmpl': 'input_target.mp4',
+        # 'best' is often blocked for separate streams. Use merged mp4.
+        'format': 'best[ext=mp4]', 
+        'outtmpl': 'input_video.mp4',
         'quiet': True,
         'extractor_args': {
             'youtube': {
+                # web_embedded is the 2026 "Secret Sauce"
                 'player_client': ['web_embedded'],
                 'player_js_version': 'actual'
             }
         },
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        # Identify as a real browser
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'nocheckcertificate': True,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([target_url])
+        ydl.download([url])
 
 # --- 3. UI LAYOUT ---
 st.set_page_config(page_title="Tactical AI v17.0", layout="wide")
