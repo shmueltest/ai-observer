@@ -3,3 +3,4 @@ ultralytics
 yt-dlp
 opencv-python-headless
 numpy
+yt-dlp[default,curl-cffi]
