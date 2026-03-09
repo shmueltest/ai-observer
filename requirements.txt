@@ -1,10 +1,5 @@
 streamlit
-ultralytics
-yt-dlp
-opencv-python-headless
-numpy
 yt-dlp[default,curl-cffi]
-yt-dlp[default,curl-cffi,deno]
 ultralytics
 opencv-python-headless
 numpy
