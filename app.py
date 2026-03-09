@@ -5,92 +5,96 @@ import numpy as np
 import os
 from ultralytics import YOLO
 
-st.set_page_config(page_title="Tactical AI Observer", layout="wide")
-st.title("🛰️ AI Tactical Command Center v16.0")
+st.set_page_config(page_title="AI Tactical Observer", layout="wide")
+st.title("🛰️ AI Tactical Command Center v16.5")
 
-# --- SIDEBAR: REPLACING YES/NO PROMPTS ---
+# --- SIDEBAR: TACTICAL CONFIGURATION (REPLACES YES/NO PROMPTS) ---
 with st.sidebar:
     st.header("📡 Mission Parameters")
-    yt_url = st.text_input("YouTube Target (URL)", placeholder="https://...")
-    
-    st.divider()
-    st.subheader("Manual Intel Upload")
-    uploaded_file = st.file_uploader("Backup: Upload Video File", type=['mp4', 'mov', 'avi'])
+    url = st.text_input("YouTube Target (URL)", placeholder="Paste link and press Enter...")
     
     st.divider()
     st.subheader("System Toggles")
-    # These replace your old 'input()' prompts
+    # These replace your old 'input("Yes/No")' calls
     conf_boxes = st.checkbox("Draw Bounding Boxes?", value=True)
-    conf_sidebar = st.checkbox("Show Tactical Sidebar?", value=True)
+    conf_sidebar = st.checkbox("Show Tactical Scoreboard?", value=True)
     conf_traffic = st.checkbox("Enable Flow Intelligence?", value=True)
     
-    observation_sec = st.slider("Observation Time (Seconds)", 5, 60, 15)
+    obs_time = st.slider("Observation Time (Seconds)", 5, 60, 15)
+    st.info("Note: First run takes longer to load AI weights.")
 
-# --- STEALTH DOWNLOADER ---
-def download_stealth(url):
-    # Forcing 'ios' and 'mweb' clients often bypasses the 403 error on cloud servers
+# --- STEALTH DOWNLOADER (THE BYPASS) ---
+def download_stealth(video_url):
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': 'input_target.mp4',
+        # 'best' is often blocked. Asking for specific mp4 is safer.
+        'format': 'best[ext=mp4]', 
+        'outtmpl': 'input_video.mp4',
         'quiet': True,
-        'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'web']}},
-        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+        'no_warnings': True,
+        # 2026 BYPASS: Use 'ios' and 'android_sdkless' to trick YouTube
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'web', 'mweb', '-android_sdkless'],
+                'player_js_version': 'actual'
+            }
+        },
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        ydl.download([video_url])
 
-# --- MAIN ENGINE ---
-if st.button("🏁 Initiate Analysis"):
-    # Priority 1: Use Uploaded File | Priority 2: Use YouTube
-    if uploaded_file:
-        with open("input_target.mp4", "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.sidebar.success("Using Uploaded Intel.")
-    elif yt_url:
-        try:
-            with st.status("Bypassing YouTube Defense...", expanded=True):
-                download_stealth(yt_url)
-        except Exception as e:
-            st.error(f"YouTube Blocked the Connection (403). Please use the 'Upload Video' option.")
-            st.stop()
+# --- EXECUTION ENGINE ---
+if st.button("🏁 Initiate Tactical Analysis"):
+    if not url:
+        st.error("Target URL Required! Please paste a YouTube link.")
     else:
-        st.warning("Please provide a URL or upload a file.")
-        st.stop()
+        with st.status("📡 Establishing Uplink...", expanded=True) as status:
+            try:
+                st.write("🛰️ Attempting Security Bypass...")
+                download_stealth(url)
+            except Exception as e:
+                st.error(f"YouTube Blocked the Server (403).")
+                st.write("TIP: Try a different video or use a 'no-cookie' link variant.")
+                st.stop()
 
-    # --- CV PROCESSING ---
-    with st.status("AI Analyzing Sector...", expanded=True) as status:
-        model = YOLO('yolo11n.pt')
-        cap = cv2.VideoCapture('input_target.mp4')
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        # Output width depends on sidebar choice
-        out_w = w * 2 if conf_sidebar else w
-        out_writer = cv2.VideoWriter('raw_render.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, (out_w, h))
-
-        results = model.track(source='input_target.mp4', stream=True, persist=True, classes=[0,2,3,5,7])
-        
-        for i, result in enumerate(results):
-            if i >= int(fps * observation_sec): break
+            # --- AI PROCESSING ---
+            st.write("🧠 Engaging Computer Vision (YOLO)...")
+            model = YOLO('yolo11n.pt')
+            cap = cv2.VideoCapture('input_video.mp4')
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             
-            # Use Sidebar Yes/No logic
-            frame = result.plot() if conf_boxes else result.orig_img.copy()
-            
-            if conf_sidebar:
-                canvas = np.zeros((h, w*2, 3), dtype=np.uint8)
-                canvas[:, :w] = frame
-                cv2.putText(canvas, "TACTICAL ANALYSIS ACTIVE", (w+20, 50), 1, 1.5, (0, 255, 255), 2)
-                final_frame = canvas
-            else:
-                final_frame = frame
-            
-            out_writer.write(final_frame)
+            # Setup output canvas based on your YES/NO choice
+            out_w = w * 2 if conf_sidebar else w
+            out_writer = cv2.VideoWriter('temp.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, (out_w, h))
 
-        cap.release()
-        out_writer.release()
-        
-        st.write("🎬 Converting for Web Playback...")
-        os.system("ffmpeg -y -i raw_render.mp4 -vcodec libx264 -crf 28 output.mp4")
-        status.update(label="Analysis Complete!", state="complete")
+            # Run tracking
+            results = model.track(source='input_video.mp4', stream=True, persist=True, conf=0.3, classes=[0,2,3,5,7])
+            
+            progress = st.progress(0)
+            for i, result in enumerate(results):
+                if i >= int(fps * obs_time): break
+                
+                # Render based on your toggles
+                frame = result.plot() if conf_boxes else result.orig_img.copy()
+                
+                if conf_sidebar:
+                    canvas = np.zeros((h, w*2, 3), dtype=np.uint8)
+                    canvas[:, :w] = frame
+                    cv2.putText(canvas, "TACTICAL FEED ACTIVE", (w+20, 50), 1, 1.5, (0, 255, 0), 2)
+                    # You can add more movement logic here
+                    final_frame = canvas
+                else:
+                    final_frame = frame
+                
+                out_writer.write(final_frame)
+                progress.progress((i + 1) / int(fps * obs_time))
 
-    st.video("output.mp4")
+            cap.release()
+            out_writer.release()
+            
+            st.write("🎬 Finalizing Video Intelligence...")
+            os.system("ffmpeg -y -i temp.mp4 -vcodec libx264 -crf 28 output.mp4")
+            status.update(label="Mission Accomplished!", state="complete")
+
+        st.video("output.mp4")
