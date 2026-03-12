@@ -7,7 +7,7 @@ from ultralytics import YOLO
 from moviepy import VideoFileClip
 
 # --- DARK MODE UI & STYLING ---
-st.set_page_config(page_title="Traffic Intelligence", layout="wide")
+st.set_page_config(page_title="Traffic Tracker", layout="wide")
 
 # Custom CSS to force a dark, professional aesthetic
 st.markdown("""
@@ -31,8 +31,8 @@ if 'config' not in st.session_state:
 
 # --- STEP 1: WELCOME ---
 if st.session_state.step == "welcome":
-    st.title("🚦 Traffic Intelligence System")
-    st.subheader("Professional Analytics Dashboard")
+    st.title("🚦 Traffic Tracking System")
+    st.subheader("שמואל קוימאן וישי גפני")
     
     uploaded_file = st.file_uploader("Upload footage for analysis", type=['mp4', 'mov', 'avi'])
     if uploaded_file:
@@ -44,7 +44,7 @@ if st.session_state.step == "welcome":
 
 # --- STEP 2: BRIEFING ---
 elif st.session_state.step == "briefing":
-    st.header("📋 Command Briefing")
+    st.header("?מה מרצה לעשות - What do You Want to Do?")
     
     with st.container(border=True):
         loc = st.text_input("Location Label", "Sector 7G - Main Intersection")
@@ -52,13 +52,13 @@ elif st.session_state.step == "briefing":
         
         c1, c2 = st.columns(2)
         with c1:
-            burn_hud = st.toggle("Burn Telemetry into Video", value=True)
-            overlays = st.toggle("AI Tracking Boxes", value=True)
+            burn_hud = st.toggle("Create new video with information? - ?להוסיף את המידע לסרטון", value=True)
+            overlays = st.toggle("Object Tracking Boxes - תיבות מעקב", value=True)
         with c2:
-            gen_graph = st.toggle("Generate Final Metrics Graph", value=True)
-            use_sidebar = st.toggle("Live Sidebar Metrics", value=True)
+            gen_graph = st.toggle("Generate Final Metrics Graph - ייצור גרף של מה היה בסרטון", value=True)
+            use_sidebar = st.toggle("Live Tracking metrics in Video - מדד זמן אמת של הכביש", value=True)
 
-    if st.button("🚀 INITIATE ANALYSIS"):
+    if st.button("🚀 INITIATE ANALYSIS בוא נתחיל"):
         st.session_state.config = {
             "loc": loc, "duration": duration, "burn": burn_hud, 
             "overlays": overlays, "graph": gen_graph, "sidebar": use_sidebar
@@ -147,8 +147,8 @@ elif st.session_state.step == "processing":
                 st.bar_chart(df.set_index('Vehicle'))
             
             st.write("### ⚡ Actions")
-            if st.button("🔄 New Analysis"): reset_app()
-            if st.button("🛑 End Session", type="primary"): reset_app()
+            if st.button("🔄 New Analysis החל מחדש"): reset_app()
+            if st.button("🛑 End Session יציאה", type="primary"): reset_app()
 
         if st.session_state.config['sidebar']:
             st.sidebar.title("Live Metrics")
