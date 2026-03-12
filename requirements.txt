@@ -1,4 +1,5 @@
 streamlit
 ultralytics
+lapx
 opencv-python-headless
 pandas
