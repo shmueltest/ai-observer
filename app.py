@@ -1,105 +1,139 @@
 import streamlit as st
 import tempfile
 import os
+import cv2
+import pandas as pd
 from ultralytics import YOLO
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Tactical AI Command", page_icon="🛰️")
+# --- Initialization ---
+if 'step' not in st.session_state:
+    st.session_state.step = "upload"
+if 'settings' not in st.session_state:
+    st.session_state.settings = {}
 
-# --- SESSION STATE INITIALIZATION ---
-# This keeps track of our Yes/No flow without resetting the app
-if 'mission_status' not in st.session_state:
-    st.session_state.mission_status = 'standby'
-if 'total_objects' not in st.session_state:
-    st.session_state.total_objects = 0
+st.set_page_config(page_title="Traffic Intel Pro", layout="wide")
+st.title("🚦 Traffic Analytics System")
 
-st.title("🛰️ Tactical AI Command Center")
-st.markdown("### Stage 1: Manual Intel Upload")
-st.info("Automated extraction bypassed. Awaiting manual file upload.")
-
-# --- STAGE 1: MANUAL UPLOAD ---
-uploaded_file = st.file_uploader("Upload Target Video (MP4, MOV, AVI)", type=['mp4', 'mov', 'avi'])
-
-if uploaded_file:
-    # If the user uploads a new file, reset the mission status
-    if st.session_state.get('last_file') != uploaded_file.name:
-        st.session_state.mission_status = 'standby'
-        st.session_state.last_file = uploaded_file.name
-
-    # Display the uploaded video in the cell
-    st.video(uploaded_file)
-    
-    st.markdown("### Stage 2: Tactical Decision")
-    
-    # --- FLOW: STANDBY ---
-    if st.session_state.mission_status == 'standby':
-        st.warning("Visual uplink secured. Do you want to proceed with AI analysis?")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Yes (Proceed)", use_container_width=True):
-                st.session_state.mission_status = 'analyzing'
-                st.rerun() # Instantly updates the UI
-        with col2:
-            if st.button("❌ No (Abort)", use_container_width=True):
-                st.session_state.mission_status = 'aborted'
-                st.rerun()
-
-    # --- FLOW: ABORTED ---
-    elif st.session_state.mission_status == 'aborted':
-        st.error("Mission scrubbed. Standing by for new orders.")
-        if st.button("Reset Mission"):
-            st.session_state.mission_status = 'standby'
-            st.rerun()
-
-    # --- FLOW: ANALYZING ---
-    elif st.session_state.mission_status == 'analyzing':
-        st.info("AI analysis engaged. Scanning sector...")
-        
-        # Streamlit requires saving the upload to a temp file so YOLO can read it
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
-            tfile.write(uploaded_file.read())
-            video_path = tfile.name
-
-        try:
-            with st.spinner("Processing tactical data..."):
-                model = YOLO("yolo11n.pt")
-                # Using half-precision and smaller image size for speed
-                results = model.predict(source=video_path, half=True, imgsz=320)
-                
-                # Calculate total objects across all frames
-                total_objects = sum([len(r.boxes) for r in results])
-                
-                st.session_state.total_objects = total_objects
-                st.session_state.mission_status = 'complete'
-                
-        except Exception as e:
-            st.error(f"Analysis Failed: {e}")
-            st.session_state.mission_status = 'failed'
-            
-        finally:
-            # Clean up the temporary file
-            if os.path.exists(video_path):
-                os.remove(video_path)
-                
+# --- STEP 1: UPLOAD ---
+if st.session_state.step == "upload":
+    uploaded_file = st.file_uploader("Upload Traffic Video", type=['mp4', 'mov', 'avi'])
+    if uploaded_file:
+        st.session_state.video_data = uploaded_file.getvalue()
+        st.session_state.step = "duration"
         st.rerun()
 
-    # --- FLOW: COMPLETE ---
-    elif st.session_state.mission_status == 'complete':
-        st.success("Mission Complete. Sector scanned.")
+# --- STEP 2: DURATION ---
+if st.session_state.step == "duration":
+    st.subheader("Analysis Parameters")
+    duration = st.number_input("How many seconds to analyze?", min_value=1, max_value=300, value=10)
+    if st.button("Set Duration"):
+        st.session_state.settings['duration'] = duration
+        st.session_state.step = "graph_ask"
+        st.rerun()
+
+# --- STEP 3: GRAPH OPTION ---
+if st.session_state.step == "graph_ask":
+    st.subheader("Visualization Settings")
+    st.write("Generate a results graph (volume over time)?")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Yes", key="graph_yes"):
+            st.session_state.settings['graph'] = True
+            st.session_state.step = "overlay_ask"
+            st.rerun()
+    with col2:
+        if st.button("No", key="graph_no"):
+            st.session_state.settings['graph'] = False
+            st.session_state.step = "overlay_ask"
+            st.rerun()
+
+# --- STEP 4: OVERLAY OPTION ---
+if st.session_state.step == "overlay_ask":
+    st.subheader("Output Video Style")
+    st.write("Include AI bounding box overlays on the output video?")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("With Overlays"):
+            st.session_state.settings['overlays'] = True
+            st.session_state.step = "sidebar_ask"
+            st.rerun()
+    with col2:
+        if st.button("Without Overlays"):
+            st.session_state.settings['overlays'] = False
+            st.session_state.step = "sidebar_ask"
+            st.rerun()
+
+# --- STEP 5: SIDEBAR OPTION ---
+if st.session_state.step == "sidebar_ask":
+    st.subheader("Data Display")
+    st.write("Include a data sidebar with live counts and traffic status?")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Include Sidebar"):
+            st.session_state.settings['sidebar'] = True
+            st.session_state.step = "process"
+            st.rerun()
+    with col2:
+        if st.button("No Sidebar"):
+            st.session_state.settings['sidebar'] = False
+            st.session_state.step = "process"
+            st.rerun()
+
+# --- STEP 6: PROCESSING & RESULTS ---
+if st.session_state.step == "process":
+    st.header("⚙️ Processing Traffic Data")
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
+        tmp.write(st.session_state.video_data)
+        video_path = tmp.name
+
+    # Load YOLO
+    model = YOLO("yolo11n.pt") 
+    
+    # Process Video Logic
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frames_to_process = int(st.session_state.settings['duration'] * fps)
+    
+    counts = {"car": 0, "bus": 0, "truck": 0, "motorcycle": 0, "person": 0}
+    
+    with st.spinner("Analyzing frames..."):
+        # We simulate frame analysis for the selected duration
+        results = model.predict(source=video_path, frames=frames_to_process, imgsz=320, verbose=False)
         
-        # Display Results directly in the UI cell
-        st.markdown("### 📊 Tactical Report")
-        st.metric(label="Total Objects Detected", value=st.session_state.total_objects)
+        # Aggregate counts from the last processed frame for the status
+        last_boxes = results[-1].boxes
+        for box in last_boxes:
+            cls = int(box.cls[0])
+            name = model.names[cls]
+            if name in counts:
+                counts[name] += 1
+
+    # --- RESULTS CELL ---
+    st.divider()
+    res_col1, res_col2 = st.columns([2, 1])
+
+    with res_col1:
+        st.subheader("Analysis Result")
+        # Logic for Traffic Status
+        total_vehicles = counts['car'] + counts['bus'] + counts['truck']
+        if total_vehicles == 0: status = "Clear"
+        elif total_vehicles < 5: status = "Flowing"
+        elif total_vehicles < 12: status = "Heavy"
+        else: status = "Stopped/Congested"
         
-        # Another Yes/No prompt to continue the loop
-        st.warning("Do you want to run another scan on this file?")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Yes (Rescan)", use_container_width=True):
-                st.session_state.mission_status = 'analyzing'
-                st.rerun()
-        with col2:
-            if st.button("❌ No (Clear)", use_container_width=True):
-                st.session_state.mission_status = 'standby'
-                st.rerun()
+        st.info(f"Traffic Status: **{status}**")
+        
+        if st.session_state.settings['graph']:
+            st.line_chart(pd.DataFrame([counts]).T)
+
+    if st.session_state.settings['sidebar']:
+        with res_col2:
+            st.sidebar.header("📊 Live Count")
+            for item, count in counts.items():
+                st.sidebar.write(f"{item.capitalize()}s: {count}")
+            st.sidebar.write(f"**Status:** {status}")
+
+    if st.button("Start New Analysis"):
+        st.session_state.step = "upload"
+        st.rerun()
