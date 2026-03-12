@@ -1,91 +1,105 @@
 import streamlit as st
-import cv2
-import yt_dlp
-import numpy as np
+import tempfile
 import os
-import re
 from ultralytics import YOLO
 
-# --- SECURE DOWNLOADER ---
-def download_video_failproof(url):
-    # Sanitize URL
-    regex = r'(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|v/|embed/)|youtu\.be/|youtube-nocookie\.com/embed/)([\w-]{11})'
-    match = re.search(regex, url)
-    target = f"https://www.youtube-nocookie.com/watch?v={match.group(1)}" if match else url
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="Tactical AI Command", page_icon="🛰️")
 
-    ydl_opts = {
-        'format': 'best[ext=mp4]', 
-        'outtmpl': 'input_target.mp4',
-        'quiet': True,
-        'js_runtimes': ['node'],
-        'extractor_args': {
-            'youtube': {
-                # 2026 Meta: 'ios' and 'mweb' are the most resilient
-                'player_client': ['ios', 'mweb', 'web_embedded'],
-                'player_js_version': 'actual'
-            }
-        },
-        'impersonate': 'chrome', # Uses curl-cffi to mimic Chrome 
-        'nocheckcertificate': True,
-    }
+# --- SESSION STATE INITIALIZATION ---
+# This keeps track of our Yes/No flow without resetting the app
+if 'mission_status' not in st.session_state:
+    st.session_state.mission_status = 'standby'
+if 'total_objects' not in st.session_state:
+    st.session_state.total_objects = 0
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([target])
+st.title("🛰️ Tactical AI Command Center")
+st.markdown("### Stage 1: Manual Intel Upload")
+st.info("Automated extraction bypassed. Awaiting manual file upload.")
 
-# --- UI ---
-st.set_page_config(page_title="Tactical AI v19", layout="wide")
-st.title("🛰️ AI Tactical Command Center")
+# --- STAGE 1: MANUAL UPLOAD ---
+uploaded_file = st.file_uploader("Upload Target Video (MP4, MOV, AVI)", type=['mp4', 'mov', 'avi'])
 
-with st.sidebar:
-    st.header("📡 Mission Parameters")
-    yt_url = st.text_input("YouTube URL")
+if uploaded_file:
+    # If the user uploads a new file, reset the mission status
+    if st.session_state.get('last_file') != uploaded_file.name:
+        st.session_state.mission_status = 'standby'
+        st.session_state.last_file = uploaded_file.name
+
+    # Display the uploaded video in the cell
+    st.video(uploaded_file)
     
-    st.divider()
-    st.subheader("🛠️ 403 Emergency Bypass")
-    st.info("If the URL fails, YouTube has blocked this server's IP. Upload the video file here instead:")
-    up_file = st.file_uploader("Manual Video Upload", type=['mp4', 'mov', 'avi'])
+    st.markdown("### Stage 2: Tactical Decision")
     
-    st.divider()
-    conf_boxes = st.checkbox("Bounding Boxes", value=True)
-    obs_time = st.slider("Seconds to Analyze", 5, 60, 10)
-
-# --- ENGINE ---
-if st.button("🏁 Initiate Analysis"):
-    source_file = None
-    
-    if up_file:
-        with open("input_target.mp4", "wb") as f:
-            f.write(up_file.getbuffer())
-        source_file = "input_target.mp4"
-    elif yt_url:
-        try:
-            with st.status("📡 Attempting Secure Bypass..."):
-                download_video_failproof(yt_url)
-                source_file = "input_target.mp4"
-        except Exception:
-            st.error("❌ 403 Forbidden: YouTube's Security is blocking this Cloud Server.")
-            st.warning("👉 **FIX:** Download the video to your computer first, then use the 'Manual Video Upload' button in the sidebar.")
-            st.stop()
-    
-    if source_file:
-        with st.status("🧠 AI Processing...", expanded=True) as status:
-            model = YOLO('yolo11n.pt')
-            cap = cv2.VideoCapture(source_file)
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30
-            w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            out_writer = cv2.VideoWriter('temp.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-            results = model.track(source=source_file, stream=True, persist=True, classes=[0,2,3,5,7])
-            
-            for i, result in enumerate(results):
-                if i >= int(fps * obs_time): break
-                frame = result.plot() if conf_boxes else result.orig_img
-                out_writer.write(frame)
-            
-            cap.release()
-            out_writer.release()
-            
-            os.system("ffmpeg -y -i temp.mp4 -vcodec libx264 -crf 28 output.mp4")
-            status.update(label="Analysis Complete!", state="complete")
+    # --- FLOW: STANDBY ---
+    if st.session_state.mission_status == 'standby':
+        st.warning("Visual uplink secured. Do you want to proceed with AI analysis?")
         
-        st.video("output.mp4")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Yes (Proceed)", use_container_width=True):
+                st.session_state.mission_status = 'analyzing'
+                st.rerun() # Instantly updates the UI
+        with col2:
+            if st.button("❌ No (Abort)", use_container_width=True):
+                st.session_state.mission_status = 'aborted'
+                st.rerun()
+
+    # --- FLOW: ABORTED ---
+    elif st.session_state.mission_status == 'aborted':
+        st.error("Mission scrubbed. Standing by for new orders.")
+        if st.button("Reset Mission"):
+            st.session_state.mission_status = 'standby'
+            st.rerun()
+
+    # --- FLOW: ANALYZING ---
+    elif st.session_state.mission_status == 'analyzing':
+        st.info("AI analysis engaged. Scanning sector...")
+        
+        # Streamlit requires saving the upload to a temp file so YOLO can read it
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
+            tfile.write(uploaded_file.read())
+            video_path = tfile.name
+
+        try:
+            with st.spinner("Processing tactical data..."):
+                model = YOLO("yolo11n.pt")
+                # Using half-precision and smaller image size for speed
+                results = model.predict(source=video_path, half=True, imgsz=320)
+                
+                # Calculate total objects across all frames
+                total_objects = sum([len(r.boxes) for r in results])
+                
+                st.session_state.total_objects = total_objects
+                st.session_state.mission_status = 'complete'
+                
+        except Exception as e:
+            st.error(f"Analysis Failed: {e}")
+            st.session_state.mission_status = 'failed'
+            
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(video_path):
+                os.remove(video_path)
+                
+        st.rerun()
+
+    # --- FLOW: COMPLETE ---
+    elif st.session_state.mission_status == 'complete':
+        st.success("Mission Complete. Sector scanned.")
+        
+        # Display Results directly in the UI cell
+        st.markdown("### 📊 Tactical Report")
+        st.metric(label="Total Objects Detected", value=st.session_state.total_objects)
+        
+        # Another Yes/No prompt to continue the loop
+        st.warning("Do you want to run another scan on this file?")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Yes (Rescan)", use_container_width=True):
+                st.session_state.mission_status = 'analyzing'
+                st.rerun()
+        with col2:
+            if st.button("❌ No (Clear)", use_container_width=True):
+                st.session_state.mission_status = 'standby'
+                st.rerun()
