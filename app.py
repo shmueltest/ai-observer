@@ -4,27 +4,24 @@ import tempfile
 import os
 import pandas as pd
 from ultralytics import YOLO
+from moviepy import VideoFileClip
 
-# --- APP CONFIG & SESSION INITIALIZATION ---
-st.set_page_config(page_title="Traffic Intelligence", layout="wide")
-
-# This resets the app and clears all variables
+# --- SESSION RESET ---
 def reset_session():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
 
-# Default State Initialization
 if 'step' not in st.session_state:
     st.session_state.step = "upload"
 if 'data' not in st.session_state:
     st.session_state.data = {}
 
-# --- STEP 1: UPLOAD ---
+# --- UI LOGIC ---
+st.title("🚦 Traffic Analytics System")
+
 if st.session_state.step == "upload":
-    st.title("🚦 Traffic Analytics System")
-    st.write("Upload a traffic feed video to begin the multi-step analysis.")
-    uploaded_file = st.file_uploader("Select Video", type=['mp4', 'mov', 'avi'])
+    uploaded_file = st.file_uploader("Upload Traffic Video", type=['mp4', 'mov', 'avi'])
     if uploaded_file:
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         tfile.write(uploaded_file.read())
@@ -32,112 +29,95 @@ if st.session_state.step == "upload":
         st.session_state.step = "duration"
         st.rerun()
 
-# --- STEP 2: DURATION ---
 elif st.session_state.step == "duration":
-    st.header("Step 1: Analysis Timing")
-    duration = st.number_input("How many seconds of the video should be analyzed?", 1, 60, 5)
-    if st.button("Confirm Duration"):
+    st.header("Step 1: Duration")
+    duration = st.number_input("Seconds to analyze?", 1, 60, 5)
+    if st.button("Confirm"):
         st.session_state.data['duration'] = duration
-        st.session_state.step = "graph_ask"
-        st.rerun()
+        st.session_state.step = "graph_ask"; st.rerun()
 
-# --- STEP 3: GRAPH ASK ---
 elif st.session_state.step == "graph_ask":
-    st.header("Step 2: Visualizations")
-    st.write("Generate a vehicle distribution graph?")
-    c1, c2 = st.columns(2)
-    if c1.button("Yes"):
+    st.header("Step 2: Graphs")
+    if st.button("Yes"): 
         st.session_state.data['graph'] = True
         st.session_state.step = "overlay_ask"; st.rerun()
-    if c2.button("No"):
+    if st.button("No"): 
         st.session_state.data['graph'] = False
         st.session_state.step = "overlay_ask"; st.rerun()
 
-# --- STEP 4: OVERLAY ASK ---
 elif st.session_state.step == "overlay_ask":
-    st.header("Step 3: AI Overlays")
-    st.write("Draw AI bounding boxes and labels on the result video?")
-    c1, c2 = st.columns(2)
-    if c1.button("Yes, add Overlays"):
+    st.header("Step 3: Overlays")
+    if st.button("With AI Boxes"):
         st.session_state.data['overlays'] = True
         st.session_state.step = "sidebar_ask"; st.rerun()
-    if c2.button("No, keep video clean"):
+    if st.button("Original Video Only"):
         st.session_state.data['overlays'] = False
         st.session_state.step = "sidebar_ask"; st.rerun()
 
-# --- STEP 5: SIDEBAR ASK ---
 elif st.session_state.step == "sidebar_ask":
     st.header("Step 4: Layout")
-    st.write("Show counts and traffic status in the sidebar?")
-    c1, c2 = st.columns(2)
-    if c1.button("Include Sidebar"):
+    if st.button("Include Sidebar"):
         st.session_state.data['sidebar'] = True
         st.session_state.step = "process"; st.rerun()
-    if c2.button("Main Screen Only"):
+    if st.button("Main View Only"):
         st.session_state.data['sidebar'] = False
         st.session_state.step = "process"; st.rerun()
 
-# --- STEP 6: PROCESSING & FINAL RESULTS ---
 elif st.session_state.step == "process":
-    st.header("⚙️ Processing Traffic Intel...")
+    st.header("⚙️ Processing...")
     
     try:
         model = YOLO("yolo11n.pt")
-        video_path = st.session_state.video_path
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(st.session_state.video_path)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         max_frames = int(st.session_state.data['duration'] * fps)
 
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-        fourcc = cv2.VideoWriter_fourcc(*'avc1')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+        # Raw OpenCV Output (Often unplayable by browsers)
+        raw_output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Reliable for raw writing
+        out = cv2.VideoWriter(raw_output, fourcc, fps, (w, h))
 
         counts = {"car": 0, "bus": 0, "truck": 0, "motorcycle": 0, "person": 0}
-        
-        with st.status("Analyzing and Encoding...", expanded=True) as status_box:
-            # Note: stream=True is required to loop through frames manually
-            results = model.track(source=video_path, stream=True, imgsz=320, persist=True)
+
+        with st.status("Analyzing Frames...") as status:
+            results = model.track(source=st.session_state.video_path, stream=True, imgsz=320)
             for i, r in enumerate(results):
                 if i >= max_frames: break
                 
-                frame = r.plot() if st.session_state.data['overlays'] else r.orig_img
-                out.write(frame)
-                
+                # Get annotated frame and RESIZE to match Writer dimensions
+                res_frame = r.plot() if st.session_state.data['overlays'] else r.orig_img
+                res_frame = cv2.resize(res_frame, (w, h))
+                out.write(res_frame)
+
                 for box in r.boxes:
                     label = model.names[int(box.cls[0])]
                     if label in counts: counts[label] += 1
             
             out.release()
             cap.release()
-            status_box.update(label="Analysis Ready", state="complete")
+            status.update(label="Converting for Web Playback...", state="running")
 
-        # Display Final Video
-        st.divider()
-        with open(output_path, 'rb') as f:
+            # --- THE MAGIC FIX: Convert to H.264 ---
+            final_output = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+            clip = VideoFileClip(raw_output)
+            clip.write_videofile(final_output, codec="libx264", audio=False)
+            clip.close()
+            status.update(label="Done!", state="complete")
+
+        # Results Display
+        with open(final_output, 'rb') as f:
             v_bytes = f.read()
-        
-        col_vid, col_btns = st.columns([3, 1])
-        with col_vid:
-            st.video(v_bytes)
-        with col_btns:
-            st.download_button("📥 Download MP4", v_bytes, "traffic_analysis.mp4", "video/mp4", use_container_width=True)
-            
-            # --- THE END SESSION OPTIONS ---
-            st.divider()
-            if st.button("🔄 Analyze New Video", use_container_width=True):
-                reset_session()
-            if st.button("🛑 End Session & Clear", use_container_width=True, type="primary"):
-                reset_session()
 
-        # Traffic Assessment
-        v_total = sum([counts['car'], counts['bus'], counts['truck']])
-        status = "Clear" if v_total == 0 else "Heavy" if v_total > 20 else "Flowing"
+        st.video(v_bytes)
+        st.download_button("📥 Download Video", v_bytes, "traffic_results.mp4", "video/mp4")
         
+        if st.button("🔄 Analyze New Link/Video"): reset_session()
+        if st.button("🛑 End Session", type="primary"): reset_session()
+
         if st.session_state.data['sidebar']:
-            st.sidebar.subheader(f"Status: {status}")
-            st.sidebar.write(f"Cars: {counts['car']} | Trucks: {counts['truck']}")
+            for k, v in counts.items(): st.sidebar.write(f"{k}: {v}")
 
     except Exception as e:
         st.error(f"Error: {e}")
-        if st.button("Back to Home"): reset_session()
+        if st.button("Reset App"): reset_session()
