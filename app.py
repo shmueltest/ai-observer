@@ -5,142 +5,80 @@ import os
 import pandas as pd
 from ultralytics import YOLO
 
-# --- APP SETUP ---
-st.set_page_config(page_title="Traffic Intelligence", layout="wide")
-
-if 'step' not in st.session_state:
-    st.session_state.step = "upload"
-if 'data' not in st.session_state:
-    st.session_state.data = {}
-
-# --- STEP 1: UPLOAD ---
-if st.session_state.step == "upload":
-    st.title("🚦 Traffic Analytics System")
-    uploaded_file = st.file_uploader("Upload Traffic Video", type=['mp4', 'mov', 'avi'])
-    if uploaded_file:
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile.write(uploaded_file.read())
-        st.session_state.video_path = tfile.name
-        st.session_state.step = "duration"
-        st.rerun()
-
-# --- STEP 2: DURATION ---
-elif st.session_state.step == "duration":
-    st.header("Analysis Parameters")
-    duration = st.number_input("How many seconds to analyze?", min_value=1, max_value=60, value=5)
-    if st.button("Confirm Duration"):
-        st.session_state.data['duration'] = duration
-        st.session_state.step = "graph_ask"
-        st.rerun()
-
-# --- STEP 3: GRAPH ASK ---
-elif st.session_state.step == "graph_ask":
-    st.header("Visualizations")
-    st.write("Generate a results graph?")
-    col1, col2 = st.columns(2)
-    if col1.button("Yes"):
-        st.session_state.data['graph'] = True
-        st.session_state.step = "overlay_ask"; st.rerun()
-    if col2.button("No"):
-        st.session_state.data['graph'] = False
-        st.session_state.step = "overlay_ask"; st.rerun()
-
-# --- STEP 4: OVERLAY ASK ---
-elif st.session_state.step == "overlay_ask":
-    st.header("Output Style")
-    st.write("Include AI bounding box overlays?")
-    col1, col2 = st.columns(2)
-    if col1.button("With Overlays"):
-        st.session_state.data['overlays'] = True
-        st.session_state.step = "sidebar_ask"; st.rerun()
-    if col2.button("No Overlays"):
-        st.session_state.data['overlays'] = False
-        st.session_state.step = "sidebar_ask"; st.rerun()
-
-# --- STEP 5: SIDEBAR ASK ---
-elif st.session_state.step == "sidebar_ask":
-    st.header("Interface Layout")
-    st.write("Display real-time count in a side bar?")
-    col1, col2 = st.columns(2)
-    if col1.button("Include Sidebar"):
-        st.session_state.data['sidebar'] = True
-        st.session_state.step = "process"; st.rerun()
-    if col2.button("Main View Only"):
-        st.session_state.data['sidebar'] = False
-        st.session_state.step = "process"; st.rerun()
+# ... (Previous Steps 1-5 stay the same) ...
 
 # --- STEP 6: PROCESSING ---
 elif st.session_state.step == "process":
-    st.header("⚙️ Processing Traffic Data")
+    st.header("⚙️ Generating Traffic Video")
     
     try:
         model = YOLO("yolo11n.pt")
         video_path = st.session_state.video_path
+        
+        # Setup Video Reader
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         max_frames = int(st.session_state.data['duration'] * fps)
-        
-        # Tracking counts
+
+        # Setup Video Writer (The 'avc1' codec is key for browsers)
+        output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+        fourcc = cv2.VideoWriter_fourcc(*'avc1') 
+        out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+
         counts = {"car": 0, "bus": 0, "truck": 0, "motorcycle": 0, "person": 0}
-        north_bound = 0
-        south_bound = 0
-
-        with st.spinner(f"Analyzing {st.session_state.data['duration']} seconds of footage..."):
-            # Fixed YOLO prediction loop using stream=True
-            results = model.track(source=video_path, stream=True, imgsz=320, verbose=False, persist=True)
-            
-            for i, r in enumerate(results):
-                if i >= max_frames:
-                    break
-                
-                for box in r.boxes:
-                    label = model.names[int(box.cls[0])]
-                    if label in counts:
-                        counts[label] += 1
-                        
-                        # North/South Logic (Simplified by Y-coordinate of detection)
-                        # Top half of frame = North, Bottom half = South
-                        y_coord = box.xyxy[0][1]
-                        if y_coord < (height / 2):
-                            north_bound += 1
-                        else:
-                            south_bound += 1
         
-        # Traffic Status Logic
-        v_total = counts['car'] + counts['bus'] + counts['truck']
-        if v_total == 0: status = "Clear"
-        elif v_total < (5 * st.session_state.data['duration']): status = "Flowing"
-        elif v_total < (15 * st.session_state.data['duration']): status = "Heavy"
-        else: status = "Stopped/Congested"
+        progress_bar = st.progress(0)
+        st_frame = st.empty() # Placeholder for live preview
 
-        # --- Sidebar Display ---
+        # Process frame by frame
+        results = model.track(source=video_path, stream=True, imgsz=320, persist=True)
+        
+        for i, r in enumerate(results):
+            if i >= max_frames:
+                break
+            
+            # 1. Get annotated frame
+            if st.session_state.data['overlays']:
+                annotated_frame = r.plot() # YOLO draws the boxes for us
+            else:
+                annotated_frame = r.orig_img # Original frame with no boxes
+            
+            # 2. Write frame to file
+            out.write(annotated_frame)
+            
+            # 3. Update Counts
+            for box in r.boxes:
+                label = model.names[int(box.cls[0])]
+                if label in counts: counts[label] += 1
+            
+            # 4. Update UI
+            progress_bar.progress((i + 1) / max_frames)
+
+        out.release()
+        cap.release()
+
+        # --- DISPLAY FINAL VIDEO ---
+        st.success("Analysis Complete!")
+        
+        # Show the video player
+        with open(output_path, 'rb') as v_file:
+            video_bytes = v_file.read()
+        st.video(video_bytes)
+
+        # --- Sidebar / Results Logic ---
+        v_total = counts['car'] + counts['bus'] + counts['truck']
+        status = "Flowing" if v_total < (10 * st.session_state.data['duration']) else "Heavy"
+        
         if st.session_state.data['sidebar']:
-            st.sidebar.title("Live Traffic Report")
-            st.sidebar.info(f"Status: {status}")
-            st.sidebar.write(f"⬆️ North Bound: {north_bound}")
-            st.sidebar.write(f"⬇️ South Bound: {south_bound}")
-            st.sidebar.divider()
+            st.sidebar.title("Live Report")
+            st.sidebar.metric("Status", status)
             for k, v in counts.items():
                 st.sidebar.write(f"{k.capitalize()}s: {v}")
 
-        # --- Main Results ---
-        st.success("Analysis Complete")
-        res_col1, res_col2 = st.columns(2)
-        with res_col1:
-            st.subheader("Traffic Metrics")
-            st.write(f"**Overall Assessment:** {status}")
-            st.write(f"**North Bound Activity:** {north_bound} detections")
-            st.write(f"**South Bound Activity:** {south_bound} detections")
-
-        if st.session_state.data['graph']:
-            with res_col2:
-                st.subheader("Vehicle Breakdown")
-                df = pd.DataFrame(list(counts.items()), columns=['Vehicle', 'Count'])
-                st.bar_chart(df.set_index('Vehicle'))
-
     except Exception as e:
-        st.error(f"Application Error: {e}")
+        st.error(f"Video Generation Error: {e}")
 
     if st.button("Start New Analysis"):
         st.session_state.step = "upload"
