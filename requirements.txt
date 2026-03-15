@@ -10,3 +10,5 @@ ultralytics
 moviepy
 pandas
 numpy
+moviepy==1.0.3
+imageio-ffmpeg==0.4.12
