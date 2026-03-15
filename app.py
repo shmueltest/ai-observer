@@ -26,10 +26,10 @@ def reset_app():
 
 def get_traffic_state(avg_speed):
     """Determines state based on speed thresholds (km/h)"""
-    if avg_speed == 0: return "⚪ NO DATA"
-    if avg_speed < 15: return "🔴 HEAVY (Congested)"
-    if avg_speed < 40: return "🟡 MODERATE (Slow)"
-    return "🟢 LIGHT (Free Flow)"
+    if avg_speed == 0: return "NO DATA", (200, 200, 200) # Gray
+    if avg_speed < 15: return "HEAVY", (0, 0, 255)      # Red
+    if avg_speed < 40: return "MODERATE", (0, 255, 255) # Yellow
+    return "LIGHT", (0, 255, 0)                         # Green
 
 if 'step' not in st.session_state:
     st.session_state.step = "welcome"
@@ -51,7 +51,7 @@ if st.session_state.step == "welcome":
 
 # --- STEP 2: BRIEFING ---
 elif st.session_state.step == "briefing":
-    st.header("?מה מרצה לעשות - What do You Want to Do?")
+    st.header("📋 Analysis Briefing")
     
     with st.container(border=True):
         loc = st.text_input("Location Label", "Sector 7G - Main Intersection")
@@ -59,11 +59,11 @@ elif st.session_state.step == "briefing":
         
         c1, c2 = st.columns(2)
         with c1:
-            burn_hud = st.toggle("Create new video with information? - ?להוסיף את המידע לסרטון", value=True)
-            overlays = st.toggle("Object Tracking Boxes - תיבות מעקב", value=True)
+            burn_hud = st.toggle("Burn Telemetry & Status into Video", value=True)
+            overlays = st.toggle("Object Tracking Boxes", value=True)
         with c2:
-            gen_graph = st.toggle("Generate Final Metrics Graph - ייצור גרף של מה היה בסרטון", value=True)
-            use_sidebar = st.toggle("Live Status & Metrics in Sidebar - מדד זמן אמת של הכביש", value=True)
+            gen_graph = st.toggle("Generate Final Metrics Graph", value=True)
+            use_sidebar = st.toggle("Live Metrics in App Sidebar", value=True)
 
     if st.button("🚀 INITIATE ANALYSIS בוא נתחיל"):
         st.session_state.config = {
@@ -88,18 +88,15 @@ elif st.session_state.step == "processing":
         out = cv2.VideoWriter(raw_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
 
         tracked_ids = set() 
-        entry_points = {} # Tracks start Y for direction
-        prev_pos = {}     # Tracks last Y for speed
+        entry_points = {} 
+        prev_pos = {}     
         final_counts = {"car": 0, "bus": 0, "truck": 0, "motorcycle": 0}
         direction_counts = {"Inbound": 0, "Outbound": 0}
+        speed_history = {"Inbound": [], "Outbound": []}
         
-        # Speed Buffers
-        speed_data = {"Inbound": [], "Outbound": []}
-        
-        # Pixels-to-Meters factor (Estimated for typical highway view)
         PXM = 0.06 
 
-        with st.status("Analyzing unique signatures and velocity...", expanded=True) as status:
+        with st.status("Analyzing and Burning Telemetry...", expanded=True) as status:
             results = model.track(source=st.session_state.video_path, stream=True, persist=True, imgsz=320)
             
             for i, r in enumerate(results):
@@ -119,17 +116,16 @@ elif st.session_state.step == "processing":
                         if label in final_counts:
                             y_center = (box[1] + box[3]) / 2
                             
-                            # --- SPEED LOGIC ---
+                            # Speed Calculation
                             if obj_id in prev_pos:
                                 dy = abs(y_center - prev_pos[obj_id])
-                                # Simple Speed: (pixels moved * scaling) / time * 3.6 for km/h
                                 speed = (dy * PXM) / (1/fps) * 3.6
-                                if speed > 2: # Ignore jitter
+                                if speed > 2:
                                     if y_center > h/2: current_speeds["Inbound"].append(speed)
                                     else: current_speeds["Outbound"].append(speed)
                             prev_pos[obj_id] = y_center
 
-                            # --- DIRECTION LOGIC ---
+                            # Unique Count & Direction
                             if obj_id not in entry_points:
                                 entry_points[obj_id] = y_center
                                 final_counts[label] += 1
@@ -143,28 +139,44 @@ elif st.session_state.step == "processing":
                                         direction_counts["Outbound"] += 1
                                         entry_points[obj_id] = -99999
 
-                            # Manual Plotting with % Confidence
                             if st.session_state.config['overlays']:
                                 x1, y1, x2, y2 = map(int, box)
                                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                                 cv2.putText(frame, f"{label} {int(conf*100)}%", (x1, y1 - 10), 
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                # Store averages for sidebar
+                # Update frame-to-frame history
                 for d in ["Inbound", "Outbound"]:
-                    if current_speeds[d]: speed_data[d].append(np.mean(current_speeds[d]))
+                    if current_speeds[d]: speed_history[d].append(np.mean(current_speeds[d]))
 
-                # --- HUD RENDERING ---
+                # --- HUD RENDERING (BURNING INTO VIDEO) ---
                 if st.session_state.config['burn']:
-                    sidebar_w = int(w * 0.25)
+                    sidebar_w = int(w * 0.3)
                     overlay = frame.copy()
                     cv2.rectangle(overlay, (w - sidebar_w, 0), (w, h), (0, 0, 0), -1)
                     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-                    cv2.putText(frame, st.session_state.config['loc'].upper(), (20, 50), 2, 0.8, (255,255,255), 2)
-                    y = 120
+                    
+                    # 1. Location & Counts
+                    cv2.putText(frame, st.session_state.config['loc'].upper(), (w - sidebar_w + 20, 40), 1, 1.2, (255,255,255), 2)
+                    y_off = 100
                     for obj, val in final_counts.items():
-                        cv2.putText(frame, f"{obj.upper()}: {val}", (w - sidebar_w + 20, y), 2, 0.6, (0, 255, 0), 1)
-                        y += 40
+                        cv2.putText(frame, f"{obj.upper()}: {val}", (w - sidebar_w + 20, y_off), 1, 1, (200, 200, 200), 1)
+                        y_off += 30
+                    
+                    # 2. Live Traffic Status (BURNT INTO OUTPUT)
+                    avg_in = speed_history["Inbound"][-1] if speed_history["Inbound"] else 0
+                    avg_out = speed_history["Outbound"][-1] if speed_history["Outbound"] else 0
+                    
+                    state_in, color_in = get_traffic_state(avg_in)
+                    state_out, color_out = get_traffic_state(avg_out)
+                    
+                    y_off += 40
+                    cv2.putText(frame, "TRAFFIC STATUS:", (w - sidebar_w + 20, y_off), 1, 1.1, (255, 255, 0), 2)
+                    
+                    y_off += 50
+                    cv2.putText(frame, f"INBOUND: {state_in}", (w - sidebar_w + 20, y_off), 1, 1, color_in, 2)
+                    y_off += 40
+                    cv2.putText(frame, f"OUTBOUND: {state_out}", (w - sidebar_w + 20, y_off), 1, 1, color_out, 2)
 
                 out.write(cv2.resize(frame, (w, h)))
             
@@ -182,7 +194,7 @@ elif st.session_state.step == "processing":
         with col_left:
             st.video(final_path)
             with open(final_path, 'rb') as f:
-                st.download_button("📥 Download Report", f.read(), "report.mp4", "video/mp4")
+                st.download_button("📥 Download Final Report", f.read(), "traffic_report.mp4", "video/mp4")
 
         with col_right:
             if st.session_state.config['graph']:
@@ -191,23 +203,22 @@ elif st.session_state.step == "processing":
                 st.bar_chart(df.set_index('Vehicle'))
             st.button("🔄 New Analysis החל מחדש", on_click=reset_app)
 
-        # Sidebar Live Status
+        # Sidebar Live Status (App Interface)
         if st.session_state.config['sidebar']:
-            st.sidebar.title("Live Traffic State")
-            
-            # Speed-based Status logic
-            avg_in = np.mean(speed_data["Inbound"]) if speed_data["Inbound"] else 0
-            avg_out = np.mean(speed_data["Outbound"]) if speed_data["Outbound"] else 0
-            
-            st.sidebar.subheader("Inbound (Down)")
-            st.sidebar.markdown(f"**Status:** {get_traffic_state(avg_in)}")
-            st.sidebar.metric("Volume", direction_counts["Inbound"])
-            
+            st.sidebar.title("Telemetry Console")
+            st.sidebar.metric("Unique IDs", len(tracked_ids))
             st.sidebar.divider()
             
-            st.sidebar.subheader("Outbound (Up)")
-            st.sidebar.markdown(f"**Status:** {get_traffic_state(avg_out)}")
-            st.sidebar.metric("Volume", direction_counts["Outbound"])
+            avg_in = speed_history["Inbound"][-1] if speed_history["Inbound"] else 0
+            avg_out = speed_history["Outbound"][-1] if speed_history["Outbound"] else 0
+            
+            st.sidebar.subheader("Inbound Flow")
+            st.sidebar.write(f"**State:** {get_traffic_state(avg_in)[0]}")
+            st.sidebar.metric("Count", direction_counts["Inbound"])
+            
+            st.sidebar.subheader("Outbound Flow")
+            st.sidebar.write(f"**State:** {get_traffic_state(avg_out)[0]}")
+            st.sidebar.metric("Count", direction_counts["Outbound"])
 
     except Exception as e:
         st.error(f"System Error: {e}")
