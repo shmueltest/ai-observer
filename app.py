@@ -6,361 +6,383 @@ from ultralytics import YOLO
 from moviepy import VideoFileClip
 import numpy as np
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="Traffic Tracker AI", layout="wide")
+# -------------------------------------------------------
+# PAGE CONFIG
+# -------------------------------------------------------
 
-# ---------------- STYLING ----------------
+st.set_page_config(page_title="Traffic AI System", layout="wide")
+
+# -------------------------------------------------------
+# UI STYLE
+# -------------------------------------------------------
+
 st.markdown("""
 <style>
 
 .stApp {
     background-color: #0B0F14;
-    color: #E5E7EB;
+    color: white;
 }
 
-/* Buttons */
 .stButton>button {
-    width: 100%;
-    border-radius: 8px;
-    height: 3em;
-    background-color: #111827;
-    color: #E5E7EB;
-    border: 1px solid #1F2937;
+    width:100%;
+    height:3em;
+    font-size:16px;
+    border-radius:8px;
+    background-color:#1F2937;
+    color:white;
 }
 
-.stButton>button:hover {
-    border: 1px solid #3B82F6;
-    color: #3B82F6;
-}
-
-/* Metric Cards */
-[data-testid="stMetric"] {
-    background-color: #111827;
-    border: 1px solid #1F2937;
-    padding: 10px;
-    border-radius: 10px;
+[data-testid="stMetric"]{
+    background-color:#111827;
+    padding:15px;
+    border-radius:10px;
+    border:1px solid #374151;
 }
 
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- RESET ----------------
+# -------------------------------------------------------
+# RESET
+# -------------------------------------------------------
+
 def reset_app():
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
+    for k in list(st.session_state.keys()):
+        del st.session_state[k]
     st.rerun()
 
-# ---------------- TRAFFIC STATE ----------------
-def get_traffic_state(avg_speed):
+# -------------------------------------------------------
+# TRAFFIC STATE
+# -------------------------------------------------------
 
-    if avg_speed == 0:
-        return "NO DATA / אין נתונים", (120,120,120)
+def get_traffic_state(speed):
 
-    if avg_speed < 15:
-        return "HEAVY / עומס כבד", (68,68,239)
+    if speed == 0:
+        return "NO DATA / אין נתונים",(200,200,200)
 
-    if avg_speed < 40:
-        return "MODERATE / עומס בינוני", (21,204,250)
+    if speed < 15:
+        return "HEAVY / עומס כבד",(0,0,255)
 
-    return "LIGHT / תנועה קלה", (34,197,94)
+    if speed < 40:
+        return "MODERATE / עומס בינוני",(0,255,255)
 
-# ---------------- SESSION STATE ----------------
-if 'step' not in st.session_state:
-    st.session_state.step = "welcome"
+    return "LIGHT / תנועה קלה",(0,255,0)
 
-if 'config' not in st.session_state:
-    st.session_state.config = {}
+# -------------------------------------------------------
+# SESSION
+# -------------------------------------------------------
 
-# ======================================================
-# STEP 1 — WELCOME
-# ======================================================
+if "step" not in st.session_state:
+    st.session_state.step="welcome"
 
-if st.session_state.step == "welcome":
+# -------------------------------------------------------
+# STEP 1
+# -------------------------------------------------------
 
-    st.title("🚦 Traffic AI Intelligence System")
-    st.subheader("מערכת בינה מלאכותית לניתוח תנועה")
+if st.session_state.step=="welcome":
 
-    st.markdown("""
-AI powered vehicle detection and congestion monitoring.  
-מערכת לזיהוי רכבים וניתוח עומסי תנועה באמצעות בינה מלאכותית
-""")
+    st.title("🚦 Traffic AI Monitoring System")
+    st.subheader("מערכת בינה מלאכותית לניטור תנועה")
 
-    uploaded_file = st.file_uploader(
+    video=st.file_uploader(
         "Upload Traffic Video / העלה סרטון תנועה",
-        type=['mp4','mov','avi']
+        type=["mp4","mov","avi"]
     )
 
-    if uploaded_file:
+    if video:
 
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile.write(uploaded_file.read())
+        tfile=tempfile.NamedTemporaryFile(delete=False,suffix=".mp4")
+        tfile.write(video.read())
 
-        st.session_state.video_path = tfile.name
-        st.session_state.step = "briefing"
+        st.session_state.video_path=tfile.name
+        st.session_state.step="config"
         st.rerun()
 
-# ======================================================
-# STEP 2 — CONFIGURATION
-# ======================================================
+# -------------------------------------------------------
+# STEP 2 CONFIG
+# -------------------------------------------------------
 
-elif st.session_state.step == "briefing":
+elif st.session_state.step=="config":
 
-    st.header("📋 Analysis Configuration / הגדרות ניתוח")
+    st.header("Analysis Settings / הגדרות ניתוח")
 
-    with st.container(border=True):
+    location=st.text_input(
+        "Location / מיקום",
+        "Main Intersection / צומת ראשית"
+    )
 
-        loc = st.text_input(
-            "Location Label / מיקום הצילום",
-            "Main Intersection / צומת ראשית"
-        )
-
-        duration = st.slider(
-            "Analysis Duration (seconds) / משך הניתוח (שניות)",
-            1,
-            60,
-            10
-        )
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-
-            burn_hud = st.toggle(
-                "Burn Telemetry Into Video / הטמעת נתונים בסרטון",
-                True
-            )
-
-            overlays = st.toggle(
-                "Show Detection Boxes / הצג תיבות זיהוי",
-                True
-            )
-
-        with c2:
-
-            gen_graph = st.toggle(
-                "Generate Graph / צור גרף",
-                True
-            )
-
-            use_sidebar = st.toggle(
-                "Sidebar Telemetry / נתונים בצד",
-                True
-            )
+    duration=st.slider(
+        "Analysis Duration Seconds / משך ניתוח",
+        5,60,10
+    )
 
     if st.button("🚀 START ANALYSIS / התחל ניתוח"):
 
-        st.session_state.config = {
-            "loc":loc,
-            "duration":duration,
-            "burn":burn_hud,
-            "overlays":overlays,
-            "graph":gen_graph,
-            "sidebar":use_sidebar
-        }
-
-        st.session_state.step = "processing"
+        st.session_state.location=location
+        st.session_state.duration=duration
+        st.session_state.step="processing"
         st.rerun()
 
-# ======================================================
-# STEP 3 — PROCESSING
-# ======================================================
+# -------------------------------------------------------
+# STEP 3 PROCESSING
+# -------------------------------------------------------
 
-elif st.session_state.step == "processing":
+elif st.session_state.step=="processing":
 
-    st.header("🧠 AI Processing Engine / מנוע ניתוח")
+    st.header("🧠 AI Processing / עיבוד בינה מלאכותית")
 
-    # DASHBOARD METRICS
-    m1,m2,m3,m4 = st.columns(4)
+    col1,col2,col3=st.columns(3)
 
-    total_metric = m1.empty()
-    inbound_metric = m2.empty()
-    outbound_metric = m3.empty()
-    speed_metric = m4.empty()
+    total_metric=col1.empty()
+    inbound_metric=col2.empty()
+    outbound_metric=col3.empty()
 
     st.divider()
 
-    try:
+    model=YOLO("yolo11n.pt")
 
-        model = YOLO("yolo11n.pt")
+    cap=cv2.VideoCapture(st.session_state.video_path)
 
-        cap = cv2.VideoCapture(st.session_state.video_path)
+    fps=cap.get(cv2.CAP_PROP_FPS) or 30
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    w=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    max_frames=int(st.session_state.duration*fps)
 
-        max_frames = int(st.session_state.config['duration'] * fps)
+    raw=tempfile.NamedTemporaryFile(delete=False,suffix=".mp4").name
 
-        raw_path = tempfile.NamedTemporaryFile(delete=False,suffix='.mp4').name
+    out=cv2.VideoWriter(
+        raw,
+        cv2.VideoWriter_fourcc(*'mp4v'),
+        fps,
+        (w,h)
+    )
 
-        out = cv2.VideoWriter(
-            raw_path,
-            cv2.VideoWriter_fourcc(*'mp4v'),
-            fps,
-            (w,h)
-        )
+    counted_ids=set()
+    entry_pos={}
+    prev_pos={}
 
-        tracked_ids=set()
-        entry_points={}
-        prev_pos={}
+    final_counts={"car":0,"bus":0,"truck":0,"motorcycle":0}
 
-        final_counts={
-            "car":0,
-            "bus":0,
-            "truck":0,
-            "motorcycle":0
-        }
+    direction_counts={"Inbound":0,"Outbound":0}
 
-        direction_counts={
-            "Inbound":0,
-            "Outbound":0
-        }
+    speed_hist={"Inbound":[],"Outbound":[]}
 
-        speed_history={
-            "Inbound":[],
-            "Outbound":[]
-        }
+    PXM=0.06
 
-        PXM=0.06
+    results=model.track(
+        source=st.session_state.video_path,
+        stream=True,
+        persist=True,
+        imgsz=320
+    )
 
-        with st.status("Running AI Detection / ניתוח בינה מלאכותית...", expanded=True):
+    for i,r in enumerate(results):
 
-            results=model.track(
-                source=st.session_state.video_path,
-                stream=True,
-                persist=True,
-                imgsz=320
-            )
+        if i>=max_frames:
+            break
 
-            for i,r in enumerate(results):
+        frame=r.orig_img.copy()
 
-                if i>=max_frames:
-                    break
+        if r.boxes.id is not None:
 
-                frame=r.orig_img.copy()
+            boxes=r.boxes.xyxy.cpu().numpy()
+            ids=r.boxes.id.int().cpu().tolist()
+            clss=r.boxes.cls.int().cpu().tolist()
+            confs=r.boxes.conf.cpu().numpy()
 
-                current_speeds={"Inbound":[],"Outbound":[]}
+            for box,obj_id,cls,conf in zip(boxes,ids,clss,confs):
 
-                if r.boxes.id is not None:
+                label=model.names[cls]
 
-                    boxes=r.boxes.xyxy.cpu().numpy()
-                    ids=r.boxes.id.int().cpu().tolist()
-                    clss=r.boxes.cls.int().cpu().tolist()
-                    conf=r.boxes.conf.cpu().numpy()
+                if label not in final_counts:
+                    continue
 
-                    for box,obj_id,cls,cf in zip(boxes,ids,clss,conf):
+                x1,y1,x2,y2=map(int,box)
+                y_center=(y1+y2)/2
 
-                        label=model.names[cls]
+                # ---------- SPEED ----------
+                if obj_id in prev_pos:
 
-                        if label in final_counts:
+                    dy=abs(y_center-prev_pos[obj_id])
+                    speed=(dy*PXM)/(1/fps)*3.6
 
-                            y_center=(box[1]+box[3])/2
+                    if speed>2:
 
-                            if obj_id in prev_pos:
+                        if y_center>h/2:
+                            speed_hist["Inbound"].append(speed)
+                        else:
+                            speed_hist["Outbound"].append(speed)
 
-                                dy=abs(y_center-prev_pos[obj_id])
-                                speed=(dy*PXM)/(1/fps)*3.6
+                prev_pos[obj_id]=y_center
 
-                                if speed>2:
+                # ---------- COUNT ----------
+                if obj_id not in counted_ids:
 
-                                    if y_center>h/2:
-                                        current_speeds["Inbound"].append(speed)
-                                    else:
-                                        current_speeds["Outbound"].append(speed)
+                    counted_ids.add(obj_id)
+                    final_counts[label]+=1
+                    entry_pos[obj_id]=y_center
 
-                            prev_pos[obj_id]=y_center
+                else:
 
-                            if obj_id not in entry_points:
+                    if obj_id in entry_pos:
 
-                                entry_points[obj_id]=y_center
-                                final_counts[label]+=1
-                                tracked_ids.add(obj_id)
+                        start=entry_pos[obj_id]
 
-                            if st.session_state.config['overlays']:
+                        if y_center>start+20:
+                            direction_counts["Inbound"]+=1
+                            entry_pos.pop(obj_id)
 
-                                x1,y1,x2,y2=map(int,box)
+                        elif y_center<start-20:
+                            direction_counts["Outbound"]+=1
+                            entry_pos.pop(obj_id)
 
-                                cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
+                # ---------- DRAW ----------
+                cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
 
-                for d in ["Inbound","Outbound"]:
+                text=f"{label} {int(conf*100)}%"
 
-                    if current_speeds[d]:
-                        speed_history[d].append(np.mean(current_speeds[d]))
-
-                # LIVE DASHBOARD UPDATE
-                total=sum(final_counts.values())
-
-                avg_in=np.mean(speed_history["Inbound"]) if speed_history["Inbound"] else 0
-                avg_out=np.mean(speed_history["Outbound"]) if speed_history["Outbound"] else 0
-
-                avg_speed=(avg_in+avg_out)/2 if (avg_in or avg_out) else 0
-
-                total_metric.metric("🚗 Vehicles / רכבים", total)
-                inbound_metric.metric("⬇ Inbound / כניסה", direction_counts["Inbound"])
-                outbound_metric.metric("⬆ Outbound / יציאה", direction_counts["Outbound"])
-                speed_metric.metric("⚡ Avg Speed / מהירות ממוצעת", f"{avg_speed:.1f} km/h")
-
-                out.write(cv2.resize(frame,(w,h)))
-
-        out.release()
-        cap.release()
-
-        final_path=tempfile.NamedTemporaryFile(delete=False,suffix='.mp4').name
-
-        clip=VideoFileClip(raw_path)
-
-        clip.write_videofile(final_path,codec="libx264",audio=False)
-
-        # RESULTS DASHBOARD
-        st.divider()
-
-        video_col,stats_col=st.columns([3,1])
-
-        with video_col:
-
-            st.subheader("📹 Processed Video / סרטון מעובד")
-
-            st.video(final_path)
-
-            with open(final_path,'rb') as f:
-
-                st.download_button(
-                    "📥 Download Report / הורד דו״ח",
-                    f.read(),
-                    "traffic_report.mp4",
-                    "video/mp4"
+                cv2.putText(
+                    frame,
+                    text,
+                    (x1,y1-8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0,255,0),
+                    2
                 )
 
-        with stats_col:
+        # ---------- TRAFFIC STATE ----------
 
-            st.subheader("📊 Vehicle Counts / ספירת רכבים")
+        avg_in=np.mean(speed_hist["Inbound"]) if speed_hist["Inbound"] else 0
+        avg_out=np.mean(speed_hist["Outbound"]) if speed_hist["Outbound"] else 0
 
-            for v,c in final_counts.items():
-                st.metric(v.capitalize(),c)
+        state_in,color_in=get_traffic_state(avg_in)
+        state_out,color_out=get_traffic_state(avg_out)
 
-            st.metric("Inbound / כניסה",direction_counts["Inbound"])
-            st.metric("Outbound / יציאה",direction_counts["Outbound"])
+        # ---------- HUD ----------
 
-            st.button(
-                "🔄 New Analysis / ניתוח חדש",
-                on_click=reset_app
+        sidebar=int(w*0.32)
+
+        overlay=frame.copy()
+
+        cv2.rectangle(
+            overlay,
+            (w-sidebar,0),
+            (w,h),
+            (0,0,0),
+            -1
+        )
+
+        cv2.addWeighted(overlay,0.7,frame,0.3,0,frame)
+
+        cv2.putText(
+            frame,
+            st.session_state.location,
+            (w-sidebar+20,40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255,255,255),
+            2
+        )
+
+        y=100
+
+        for v,c in final_counts.items():
+
+            cv2.putText(
+                frame,
+                f"{v.upper()}: {c}",
+                (w-sidebar+20,y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (200,200,200),
+                2
             )
 
-        if st.session_state.config['graph']:
+            y+=35
 
-            st.subheader("📊 Vehicle Distribution / התפלגות רכבים")
+        y+=20
 
-            df=pd.DataFrame(
-                list(final_counts.items()),
-                columns=['Vehicle','Total']
-            )
+        cv2.putText(
+            frame,
+            "TRAFFIC STATUS",
+            (w-sidebar+20,y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255,255,0),
+            2
+        )
 
-            st.bar_chart(df.set_index('Vehicle'))
+        y+=40
 
-    except Exception as e:
+        cv2.putText(
+            frame,
+            f"INBOUND: {state_in}",
+            (w-sidebar+20,y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            color_in,
+            2
+        )
 
-        st.error(f"System Error / שגיאת מערכת: {e}")
+        y+=35
 
-        if st.button("Emergency Reset / איפוס חירום"):
-            reset_app()
+        cv2.putText(
+            frame,
+            f"OUTBOUND: {state_out}",
+            (w-sidebar+20,y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            color_out,
+            2
+        )
+
+        # ---------- DASHBOARD ----------
+
+        total=sum(final_counts.values())
+
+        total_metric.metric(
+            "Vehicles / רכבים",
+            total
+        )
+
+        inbound_metric.metric(
+            "Inbound Traffic / תנועה נכנסת",
+            state_in
+        )
+
+        outbound_metric.metric(
+            "Outbound Traffic / תנועה יוצאת",
+            state_out
+        )
+
+        out.write(cv2.resize(frame,(w,h)))
+
+    out.release()
+    cap.release()
+
+    final=tempfile.NamedTemporaryFile(delete=False,suffix=".mp4").name
+
+    clip=VideoFileClip(raw)
+
+    clip.write_videofile(final,codec="libx264",audio=False)
+
+    st.subheader("Processed Video / סרטון מעובד")
+
+    st.video(final)
+
+    with open(final,"rb") as f:
+
+        st.download_button(
+            "Download Video / הורד סרטון",
+            f.read(),
+            "traffic_report.mp4"
+        )
+
+    st.button(
+        "New Analysis / ניתוח חדש",
+        on_click=reset_app
+    )
