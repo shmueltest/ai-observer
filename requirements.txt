@@ -4,3 +4,9 @@ opencv-python-headless
 moviepy
 pandas
 lapx
+streamlit
+opencv-python
+ultralytics
+moviepy
+pandas
+numpy
