@@ -3,7 +3,7 @@ import cv2
 import tempfile
 import pandas as pd
 from ultralytics import YOLO
-from moviepy.editor import VideoFileClip
+from moviepyimport VideoFileClip
 import numpy as np
 
 # -------------------------------------------------------
