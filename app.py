@@ -12,7 +12,7 @@ st.set_page_config(page_title="Traffic Tracker", layout="wide")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #445b8e; color: #db2d2d; }
+    .stApp { background-color: #445b8e; color: #a10303 }
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #464b5d; }
     .stButton>button:hover { border: 1px solid #ff4b4b; color: #ff4b4b; }
     [data-testid="stExpander"] { background-color: #161b22; border: 1px solid #db2d2d; }
