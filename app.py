@@ -15,7 +15,7 @@ st.markdown("""
     .stApp { background-color: #445b8e; color: #ffffff; }
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #464b5d; }
     .stButton>button:hover { border: 1px solid #ff4b4b; color: #ff4b4b; }
-    [data-testid="stExpander"] { background-color: #161b22; border: 1px solid #30363d; }
+    [data-testid="stExpander"] { background-color: #161b22; border: 1px solid #db2d2d; }
     </style>
     """, unsafe_allow_html=True)
 
