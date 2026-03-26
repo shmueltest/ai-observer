@@ -40,7 +40,7 @@ if 'config' not in st.session_state:
 if st.session_state.step == "welcome":
     st.title("🚦 Traffic Tracking System")
     st.header("שמואל קויפמאן וישי גפני")
-    st.subheader("youtube video dowmnloder - להורדת סרטים מיוטיוב : https://en1.savefrom.net/1-youtube-video-downloader-13sg/״")
+    st.subheader("youtube video downloader ------- להורדת סרטים מיוטיוב   https://en1.savefrom.net/1-youtube-video-downloader-13sg/״")
 
     
     uploaded_file = st.file_uploader("Upload footage for analysis", type=['mp4', 'mov', 'avi'])
