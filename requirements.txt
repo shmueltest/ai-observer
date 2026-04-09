@@ -4,4 +4,4 @@ opencv-python-headless
 moviepy
 pandas
 lapx
-cv2
+
