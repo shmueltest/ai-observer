@@ -74,7 +74,7 @@ T = {
     "upload_help":      "Supported formats: MP4, MOV, AVI | פורמטים נתמכים: MP4, MOV, AVI",
 
  #step 1.5 cache
-   st.sidebar.info("Cache Management") 
+   st.sidebar.info("Cache Management"):
 # Line 75: Now the 'if' statement is valid
 if st.sidebar.button("Clear Cache"):
     st.cache_data.clear()
