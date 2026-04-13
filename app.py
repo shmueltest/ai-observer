@@ -66,7 +66,7 @@ MIN_CONFIDENCE: float = 0.35
 T = {
     # App title and authors
     "app_title":        "🚦 Traffic Tracking System | מערכת ניטור תנועה",
-    "authors":          "שמואל קויפמאן וישי גפני | Shmuel Koufman & Yishai Gafni",
+    "authors":          "שמואל קויפמאן וישי גפני | Shmuel Koyfman & Yishai Gafni",
     "yt_hint":          "📥 Download YouTube videos here | הורדת סרטוני יוטיוב כאן",
 
     # Step 1 — upload screen
