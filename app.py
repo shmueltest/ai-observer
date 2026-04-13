@@ -72,8 +72,13 @@ T = {
     # Step 1 — upload screen
     "upload_label":     "Upload traffic footage | העלה סרטון תנועה",
     "upload_help":      "Supported formats: MP4, MOV, AVI | פורמטים נתמכים: MP4, MOV, AVI",
-   if st.sidebar.button("Clear Cache"):
-     st.cache_data.clear()
+
+ #step 1.5 cache
+   st.sidebar.info("Cache Management") 
+# Line 75: Now the 'if' statement is valid
+if st.sidebar.button("Clear Cache"):
+    st.cache_data.clear()
+    st.sidebar.success("Cache cleared!")
 
     # Step 2 — settings screen
     "briefing_header":  "📋 Analysis Setup | הגדרת ניתוח",
