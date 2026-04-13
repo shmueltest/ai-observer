@@ -72,6 +72,8 @@ T = {
     # Step 1 — upload screen
     "upload_label":     "Upload traffic footage | העלה סרטון תנועה",
     "upload_help":      "Supported formats: MP4, MOV, AVI | פורמטים נתמכים: MP4, MOV, AVI",
+    if st.sidebar.button("Clear Cache"):
+     st.cache_data.clear()
 
     # Step 2 — settings screen
     "briefing_header":  "📋 Analysis Setup | הגדרת ניתוח",
