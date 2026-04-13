@@ -1,130 +1,120 @@
 """
 traffic_tracker.py
 ==================
-A Streamlit app that uses YOLOv11 object detection + ByteTrack multi-object
-tracking to analyse traffic footage.
+This app watches a traffic video and counts the cars.
 
-HOW IT WORKS — BIG PICTURE
-───────────────────────────
-1. The user uploads a video clip (MP4 / MOV / AVI).
-2. Each frame is passed through a YOLO model that draws bounding boxes around
-   vehicles and assigns each box a *persistent tracking ID* that stays the
-   same across frames as long as the vehicle is visible.
-3. We use those IDs to:
-      a) COUNT unique vehicles  — a vehicle is counted the first time its ID
-         appears, never again.
-      b) DETERMINE DIRECTION    — we record where the vehicle's centre was
-         when we first saw it, then watch which way it moves.  Once it has
-         moved far enough (DIRECTION_THRESHOLD px), we lock its direction.
-      c) ESTIMATE SPEED         — by measuring how many pixels the vehicle
-         moves between consecutive frames, multiplying by the known real-world
-         size of a pixel (PXM), and converting to km/h.
-4. A HUD is optionally burned onto each frame showing live stats, and the
-   processed video is re-encoded with libx264 for browser playback.
+Here is what it does, step by step:
+1. The user uploads a video.
+2. The app looks at every frame and finds all the vehicles in it.
+   Each vehicle gets a number (an ID) that sticks to it across frames.
+3. Using those IDs the app:
+   - Counts each vehicle once (the first time it appears).
+   - Figures out which way it is going (into the scene or out of it).
+   - Estimates how fast it is moving.
+4. The results are drawn on top of the video and shown to the user.
 """
 
-# ── Standard library ──────────────────────────────────────────────────────────
-import atexit
-import io
-import os
-import tempfile
+# --- Built-in Python tools ---
+import atexit    # lets us run cleanup code when the app closes
+import io        # for building files in memory (used for CSV export)
+import os        # for deleting temp files
+import tempfile  # for creating temp files on disk
 
-# ── Third-party ───────────────────────────────────────────────────────────────
-import cv2
-import numpy as np
-import pandas as pd
-import streamlit as st
-from moviepy import VideoFileClip
-from ultralytics import YOLO
+# --- Installed packages ---
+import cv2                    # reads and writes video frames
+import numpy as np            # maths on arrays of numbers
+import pandas as pd           # builds tables (used for the CSV export)
+import streamlit as st        # builds the web UI
+from moviepy import VideoFileClip   # re-encodes the output video
+from ultralytics import YOLO        # the AI model that finds vehicles
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# CONSTANTS
-# Centralise all "magic numbers" here so they are easy to tune.
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# SETTINGS
+# Change these numbers to tune how the app behaves.
+# =============================================================================
 
-# Metres-per-pixel: how many real-world metres one pixel represents vertically.
-# This depends entirely on the camera height / angle / zoom.
-# 0.06 m/px is a reasonable default for a camera mounted ~6–8 m above a road.
-# Increase this value if speeds appear too low; decrease if too high.
+# How many real-world metres one pixel represents (top-to-bottom).
+# If the speed numbers look wrong, adjust this first.
+# ~0.06 works for a camera about 6-8 metres above the road.
 PXM: float = 0.06
 
-# How many pixels a vehicle must travel vertically from its entry position
-# before we commit to calling it "Inbound" or "Outbound".
-# Too small → jitter causes wrong counts.  Too large → short clips miss vehicles.
+# How many pixels a vehicle must move before we decide which way it is going.
+# If direction counts seem wrong, try raising this a little.
 DIRECTION_THRESHOLD: int = 20
 
-# Speeds below this value (km/h) are treated as tracking noise and ignored.
+# We ignore speed readings below this (km/h) — they are just camera wobble.
 MIN_SPEED_KMH: float = 2.0
 
-# The HUD panel on the right edge of each frame is this fraction of frame width.
+# The info panel drawn on the right side of the video takes up this much
+# of the frame width. 0.30 means 30%.
 HUD_WIDTH_RATIO: float = 0.30
 
-# Only these COCO class names are counted; everything else is ignored.
+# Only these vehicle types are counted. Everything else is ignored.
 VEHICLE_CLASSES: tuple[str, ...] = ("car", "bus", "truck", "motorcycle")
 
-# Minimum YOLO confidence required to act on a detection.
-# Lower = more detections but more false positives.
+# The AI model must be this confident before we trust a detection.
+# Lower = catches more vehicles but also makes more mistakes.
 MIN_CONFIDENCE: float = 0.35
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# BILINGUAL UI STRINGS
-# Keep all user-visible text here so the rest of the code stays clean.
-# Format: "English text | טקסט עברי"
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# ALL UI TEXT (English and Hebrew side by side)
+# Keeping all the words here means we only need to change one place
+# if we want to update a label.
+# =============================================================================
 T = {
-    # App-level
+    # App title and authors
     "app_title":        "🚦 Traffic Tracking System | מערכת ניטור תנועה",
     "authors":          "שמואל קויפמאן וישי גפני | Shmuel Koyfman & Yishai Gafni",
     "yt_hint":          "📥 Download YouTube videos here | הורדת סרטוני יוטיוב כאן",
 
-    # Welcome step
+    # Step 1 — upload screen
     "upload_label":     "Upload traffic footage | העלה סרטון תנועה",
     "upload_help":      "Supported formats: MP4, MOV, AVI | פורמטים נתמכים: MP4, MOV, AVI",
 
-    # Briefing step
+    # Step 2 — settings screen
     "briefing_header":  "📋 Analysis Setup | הגדרת ניתוח",
     "loc_label":        "Location label | תווית מיקום",
     "loc_default":      "Sector 7G – Main Intersection",
-    "duration_label":   "Analysis window (seconds) | חלון ניתוח (שניות)",
-    "toggle_burn":      "Burn telemetry into video | שרוף נתונים על הווידאו",
-    "toggle_overlays":  "Show tracking boxes | הצג תיבות מעקב",
+    "duration_label":   "How many seconds to analyse | כמה שניות לנתח",
+    "toggle_burn":      "Draw stats onto the video | צייר סטטיסטיקות על הווידאו",
+    "toggle_overlays":  "Show boxes around vehicles | הצג תיבות סביב רכבים",
     "toggle_graph":     "Show results chart | הצג גרף תוצאות",
-    "toggle_sidebar":   "Live sidebar metrics | מדדים חיים בסרגל צד",
+    "toggle_sidebar":   "Show live numbers in the sidebar | הצג מספרים חיים בסרגל צד",
     "start_btn":        "🚀 Start Analysis | התחל ניתוח",
 
-    # Processing step
+    # Step 3 — processing screen
     "proc_header":      "🧠 Analysing footage… | מנתח סרטון…",
-    "proc_status":      "Running YOLO + tracking… | מריץ YOLO + מעקב…",
-    "proc_done":        "✅ Analysis complete | ניתוח הושלם",
-    "proc_encode":      "Re-encoding video for browser… | מקודד מחדש לדפדפן…",
+    "proc_status":      "Finding and counting vehicles… | מוצא וסופר רכבים…",
+    "proc_done":        "✅ Done! | סיימנו!",
+    "proc_encode":      "Preparing video for playback… | מכין ווידאו להפעלה…",
 
-    # Results
+    # Results screen
     "results_header":   "📊 Results | תוצאות",
     "dl_video":         "📥 Download video | הורד ווידאו",
     "dl_csv":           "📄 Download CSV | הורד CSV",
-    "chart_title":      "Vehicle distribution | התפלגות כלי רכב",
-    "new_analysis":     "🔄 New analysis | ניתוח חדש",
+    "chart_title":      "Vehicles by type | רכבים לפי סוג",
+    "new_analysis":     "🔄 Analyse another video | נתח סרטון אחר",
 
     # Sidebar
-    "sidebar_title":    "📡 Telemetry | טלמטריה",
-    "unique_vehicles":  "Unique vehicles | רכבים ייחודיים",
-    "inbound":          "Inbound | נכנסים",
-    "outbound":         "Outbound | יוצאים",
-    "traffic_state":    "Traffic state | מצב תנועה",
+    "sidebar_title":    "📡 Live Numbers | מספרים בזמן אמת",
+    "unique_vehicles":  "Vehicles seen | רכבים שנראו",
+    "inbound":          "Coming in | נכנסים",
+    "outbound":         "Going out | יוצאים",
+    "traffic_state":    "Traffic | תנועה",
     "speed_label":      "Avg speed | מהירות ממוצעת",
 
-    # Errors
-    "err_video":        "❌ Cannot open video file. Please re-upload. | לא ניתן לפתוח קובץ. נסה שוב.",
-    "err_generic":      "System error | שגיאת מערכת",
-    "err_reset":        "🔄 Emergency reset | איפוס חירום",
+    # Error messages
+    "err_video":        "❌ Could not open the video. Please try uploading it again. | לא ניתן לפתוח את הסרטון. נסה שוב.",
+    "err_generic":      "Something went wrong | משהו השתבש",
+    "err_reset":        "🔄 Start over | התחל מחדש",
 }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# APP CONFIG & GLOBAL STYLING
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# PAGE SETUP AND VISUAL STYLE
+# =============================================================================
 
 st.set_page_config(
     page_title="Traffic Tracker | ניטור תנועה",
@@ -132,17 +122,17 @@ st.set_page_config(
     layout="wide",
 )
 
-# Custom CSS — improves readability over the default Streamlit theme.
-# Dark navy background, white/light text, and red accent colours.
+# The CSS below changes colours, card styles, and button looks.
+# It runs once when the page loads and affects the whole app.
 st.markdown("""
 <style>
-/* ── Page background & base text ── */
+/* Dark blue background for the whole page */
 .stApp {
     background: linear-gradient(160deg, #1a2540 0%, #243052 100%);
     color: #e8eaf0;
 }
 
-/* ── Metric cards ── */
+/* Number cards (the big stat boxes) */
 [data-testid="stMetric"] {
     background: rgba(255,255,255,0.06);
     border: 1px solid rgba(255,255,255,0.12);
@@ -152,7 +142,7 @@ st.markdown("""
 [data-testid="stMetricLabel"] { font-size: 0.78rem; opacity: 0.7; }
 [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; color: #fff; }
 
-/* ── Buttons ── */
+/* Buttons */
 .stButton > button {
     width: 100%;
     border-radius: 8px;
@@ -165,7 +155,7 @@ st.markdown("""
 }
 .stButton > button:hover { border-color: #ff4b4b; color: #ff4b4b; }
 
-/* ── Bordered containers ── */
+/* Boxes with a border (st.container with border=True) */
 [data-testid="stVerticalBlockBorderWrapper"] {
     border: 1px solid rgba(255,255,255,0.12) !important;
     border-radius: 12px !important;
@@ -173,17 +163,17 @@ st.markdown("""
     padding: 1rem !important;
 }
 
-/* ── Expander ── */
+/* Collapsible sections */
 [data-testid="stExpander"] {
     background: rgba(0,0,0,0.25);
     border: 1px solid #db2d2d;
     border-radius: 8px;
 }
 
-/* ── Dividers ── */
+/* Horizontal lines */
 hr { border-color: rgba(255,255,255,0.1) !important; }
 
-/* ── Sidebar ── */
+/* Left sidebar panel */
 [data-testid="stSidebar"] {
     background: #111827;
     border-right: 1px solid rgba(255,255,255,0.08);
@@ -192,30 +182,30 @@ hr { border-color: rgba(255,255,255,0.1) !important; }
 """, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TEMP FILE MANAGEMENT
-# Every NamedTemporaryFile we create is registered here.
-# Python's atexit hook deletes them all when the process exits so we don't
-# slowly fill the server's disk.
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# TEMP FILE CLEANUP
+# Every time we create a temporary file we add it to this list.
+# When the app closes, Python automatically deletes them all.
+# =============================================================================
 _tmp_files: list[str] = []
 
 
 def _register_tmp(path: str) -> str:
-    """Register a temp file path for cleanup on exit, then return it."""
+    """Add a file to the cleanup list, then return its path."""
     _tmp_files.append(path)
     return path
 
 
+# This runs the cleanup when the app process ends
 atexit.register(lambda: [os.unlink(f) for f in _tmp_files if os.path.exists(f)])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# SMALL HELPER FUNCTIONS
+# =============================================================================
 
 def reset_app() -> None:
-    """Wipe all session state and restart from the welcome screen."""
+    """Clear everything and go back to the start screen."""
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
@@ -223,59 +213,61 @@ def reset_app() -> None:
 
 def get_traffic_state(avg_speed: float) -> tuple[str, tuple[int, int, int]]:
     """
-    Classify traffic density from average speed (km/h).
+    Turn a speed (km/h) into a traffic label and a colour.
 
-    Returns a (label, BGR_colour) tuple used in the HUD and sidebar.
-    Speed thresholds are typical urban road values:
-      < 15 km/h  → heavy congestion
-      15–40 km/h → moderate flow
-      > 40 km/h  → light / free flow
+    Returns two things: a word like "HEAVY" and a colour for the video overlay.
+      No data yet  → grey
+      Under 15     → HEAVY (red)
+      15 to 40     → MODERATE (yellow)
+      Over 40      → LIGHT (green)
     """
     if avg_speed == 0:
-        return "NO DATA",  (200, 200, 200)   # grey  — no vehicles seen yet
+        return "NO DATA",  (200, 200, 200)  # grey
     if avg_speed < 15:
-        return "HEAVY",    (0,   0, 255)     # red   — congestion
+        return "HEAVY",    (0,   0, 255)    # red
     if avg_speed < 40:
-        return "MODERATE", (0, 255, 255)     # yellow — moderate
-    return     "LIGHT",    (0, 255,   0)     # green  — free flow
+        return "MODERATE", (0, 255, 255)    # yellow
+    return     "LIGHT",    (0, 255,   0)    # green
 
 
-@st.cache_resource(show_spinner="Loading YOLO model… | טוען מודל…")
+@st.cache_resource(show_spinner="Loading AI model… | טוען מודל בינה מלאכותית…")
 def load_model() -> YOLO:
     """
-    Load the YOLOv11-nano model and cache it for the whole session.
+    Load the vehicle-detection model.
 
-    @st.cache_resource means this function runs ONCE no matter how many times
-    Streamlit re-runs the script.  Without caching, every page interaction
-    would reload ~6 MB of model weights from disk.
+    The @st.cache_resource tag means this only runs ONCE per session.
+    Without it the model would reload from disk every time the user
+    clicks anything, which would be very slow.
 
-    'yolo11n.pt' is the nano variant — fastest inference, lowest accuracy.
-    Swap for 'yolo11s.pt' or 'yolo11m.pt' for better accuracy at the cost
-    of speed.
+    'yolo11n.pt' is the small fast version of the model.
+    Use 'yolo11s.pt' or 'yolo11m.pt' if you want better accuracy
+    and do not mind waiting a bit longer.
     """
     return YOLO("yolo11n.pt")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SESSION STATE INITIALISATION
-# Streamlit re-runs this entire script on every user interaction.
-# session_state is the only place data persists across re-runs.
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# REMEMBER WHERE WE ARE
+# Streamlit re-runs this whole file every time the user clicks something.
+# We use st.session_state to remember things between those re-runs.
+# 'step' tracks which screen to show: welcome → settings → processing.
+# =============================================================================
 if "step" not in st.session_state:
-    st.session_state.step = "welcome"   # flow: "welcome" → "briefing" → "processing"
+    st.session_state.step = "welcome"
 if "config" not in st.session_state:
     st.session_state.config = {}
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP 1 — WELCOME SCREEN
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# SCREEN 1 — WELCOME
+# =============================================================================
 if st.session_state.step == "welcome":
 
     st.title(T["app_title"])
     st.caption(T["authors"])
     st.divider()
 
+    # Two columns: instructions on the left, file upload on the right
     col_info, col_upload = st.columns([1, 1], gap="large")
 
     with col_info:
@@ -284,11 +276,11 @@ if st.session_state.step == "welcome":
         1. **Upload** a traffic video clip  
            **העלה** קליפ וידאו של תנועה
 
-        2. **Configure** the analysis settings  
-           **הגדר** את הגדרות הניתוח
+        2. **Choose** your settings  
+           **בחר** את ההגדרות שלך
 
-        3. **Download** the annotated video + CSV report  
-           **הורד** את הווידאו המוערך + דוח CSV
+        3. **Download** the result video and data  
+           **הורד** את הווידאו והנתונים
         """)
         st.info(f"[{T['yt_hint']}](https://en1.savefrom.net/1-youtube-video-downloader-13sg/)")
 
@@ -300,8 +292,8 @@ if st.session_state.step == "welcome":
             help=T["upload_help"],
         )
         if uploaded_file:
-            # Save to a temp file so OpenCV and YOLO can read it by path.
-            # Streamlit's UploadedFile is an in-memory buffer, not a real path.
+            # Streamlit gives us the file as raw bytes in memory.
+            # We save it to a real file on disk so the AI model can open it.
             tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
             tfile.write(uploaded_file.read())
             tfile.flush()
@@ -311,15 +303,15 @@ if st.session_state.step == "welcome":
             st.rerun()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP 2 — ANALYSIS BRIEFING / SETTINGS
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# SCREEN 2 — SETTINGS
+# =============================================================================
 elif st.session_state.step == "briefing":
 
     st.title(T["briefing_header"])
     st.divider()
 
-    # Preview the uploaded video so the user can confirm it loaded correctly
+    # Let the user check the video loaded correctly before starting
     with st.expander("📹 Preview uploaded footage | תצוגה מקדימה של הסרטון", expanded=True):
         st.video(st.session_state.video_path)
 
@@ -329,25 +321,26 @@ elif st.session_state.step == "briefing":
         loc = st.text_input(
             T["loc_label"],
             value=T["loc_default"],
-            help="This label appears in the HUD overlay | תווית זו מופיעה על גבי הווידאו",
+            help="This text will appear in the corner of the output video. | הטקסט הזה יופיע בפינת הווידאו.",
         )
         duration = st.slider(
             T["duration_label"],
             min_value=1, max_value=60, value=10,
-            help="Longer = more data, slower processing | ארוך יותר = יותר נתונים, עיבוד איטי יותר",
+            help="More seconds = more data, but takes longer. | יותר שניות = יותר נתונים, אבל לוקח יותר זמן.",
         )
 
         st.markdown("#### Output options | אפשרויות פלט")
         c1, c2 = st.columns(2)
         with c1:
-            burn_hud    = st.toggle(T["toggle_burn"],     value=True)
-            overlays    = st.toggle(T["toggle_overlays"], value=True)
+            burn_hud  = st.toggle(T["toggle_burn"],     value=True)
+            overlays  = st.toggle(T["toggle_overlays"], value=True)
         with c2:
             gen_graph   = st.toggle(T["toggle_graph"],   value=True)
             use_sidebar = st.toggle(T["toggle_sidebar"], value=True)
 
     st.divider()
     if st.button(T["start_btn"], use_container_width=True):
+        # Save the settings so the next screen can read them
         st.session_state.config = {
             "loc": loc, "duration": duration,
             "burn": burn_hud, "overlays": overlays,
@@ -357,37 +350,39 @@ elif st.session_state.step == "briefing":
         st.rerun()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP 3 — PROCESSING
-# This is the core of the app.  It runs once and stores results in session_state.
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# SCREEN 3 — PROCESSING
+# This is the main engine. It goes through the video frame by frame,
+# finds all the vehicles, and builds up the counts and speed data.
+# =============================================================================
 elif st.session_state.step == "processing":
 
     st.title(T["proc_header"])
 
     try:
-        # ── Load the YOLO model (cached — instant on second run) ──────────────
+        # Load the AI model (uses the cached version if already loaded)
         model = load_model()
 
-        # ── Read video metadata then release immediately ───────────────────────
-        # We open the file ONLY to read fps/width/height, then close it.
-        # model.track() will open its own internal reader later, and keeping
-        # two handles open simultaneously can cause conflicts on Windows.
+        # Open the video just to read its width, height, and frame rate,
+        # then close it straight away. The AI model will open its own
+        # copy of the video later — two open handles at once can cause
+        # problems on some computers.
         cap = cv2.VideoCapture(st.session_state.video_path)
         if not cap.isOpened():
             st.error(T["err_video"])
             st.stop()
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0   # frames per second
         w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()   # ← release right away
+        cap.release()  # done — close it now
 
+        # How many frames to process in total
         max_frames = int(st.session_state.config["duration"] * fps)
 
-        # ── Set up the output video writer ────────────────────────────────────
-        # We first write a raw mp4v file (fast, OpenCV-native), then re-encode
-        # with libx264 at the end for browser compatibility.
+        # Set up a file to write the output video into.
+        # We use a raw format first (mp4v) because it is fast to write.
+        # Later we convert it to the format browsers can play (h264).
         raw_path = _register_tmp(
             tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
         )
@@ -395,42 +390,36 @@ elif st.session_state.step == "processing":
             raw_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
         )
 
-        # ── Tracking data structures ──────────────────────────────────────────
+        # --- Data we collect while watching the video ---
         #
-        # entry_points   {obj_id: y_center_at_first_sight}
-        #   Stores where each vehicle first appeared vertically.
-        #   Sentinel values mark locked direction:
-        #     99999  → confirmed Inbound  (moving downward in frame)
-        #    -99999  → confirmed Outbound (moving upward in frame)
+        # entry_points: where each vehicle was when we first saw it (y position).
+        #   We use two special values to mark that we have already decided
+        #   its direction:  99999 = going inbound,  -99999 = going outbound.
         #
-        # prev_pos       {obj_id: y_center_last_frame}
-        #   Used to compute per-frame vertical displacement for speed estimation.
+        # prev_pos: where each vehicle was in the previous frame.
+        #   We use this to measure how far it moved (for speed).
         #
-        # counted_ids    set of obj_ids already counted
-        #   An ID is added the FIRST time we see it with sufficient confidence.
-        #   We NEVER count the same ID twice, even if the vehicle disappears and
-        #   reappears (ByteTrack re-assigns the same ID on re-entry within a
-        #   short gap window).
-        #
+        # counted_ids: the set of vehicle IDs we have already counted.
+        #   Once an ID is in here we never count it again, even if it
+        #   disappears and comes back.
         entry_points: dict[int, float] = {}
         prev_pos:     dict[int, float] = {}
         counted_ids:  set[int]         = set()
 
-        final_counts     = dict.fromkeys(VEHICLE_CLASSES, 0)
+        final_counts     = dict.fromkeys(VEHICLE_CLASSES, 0)  # e.g. {"car": 0, ...}
         direction_counts = {"Inbound": 0, "Outbound": 0}
-        speed_history    = {"Inbound": [], "Outbound": []}
+        speed_history    = {"Inbound": [], "Outbound": []}     # one entry per frame
 
-        # ── Main processing loop ──────────────────────────────────────────────
+        # --- Main loop — go through every frame ---
         with st.status(T["proc_status"], expanded=True) as status:
             progress_bar = st.progress(0.0)
-            frame_info   = st.empty()   # placeholder for live frame counter
+            frame_info   = st.empty()  # small text showing current frame number
 
-            # model.track() is a generator: it yields one Results object per
-            # frame without loading the entire video into memory at once.
-            # persist=True  → ByteTrack keeps IDs stable across frames.
-            # stream=True   → memory-efficient generator mode.
-            # imgsz=320     → resize frames to 320 px before inference (faster).
-            # conf=          → ignore detections below this confidence.
+            # model.track() gives us one frame at a time.
+            # persist=True  → keeps the same ID on the same vehicle across frames.
+            # stream=True   → does not load the whole video into memory at once.
+            # imgsz=320     → shrinks each frame to 320px before the AI looks at it (faster).
+            # conf=          → skip detections the model is not sure about.
             results = model.track(
                 source=st.session_state.video_path,
                 stream=True,
@@ -443,86 +432,75 @@ elif st.session_state.step == "processing":
                 if i >= max_frames:
                     break
 
-                # Update progress UI every 10 frames to reduce Streamlit overhead
+                # Update the progress bar every 10 frames to keep things snappy
                 if i % 10 == 0:
                     progress_bar.progress(min(i / max_frames, 1.0))
-                    frame_info.caption(
-                        f"Frame {i}/{max_frames} | פריים {i}/{max_frames}"
-                    )
+                    frame_info.caption(f"Frame {i}/{max_frames} | פריים {i}/{max_frames}")
 
-                frame = r.orig_img.copy()
+                frame = r.orig_img.copy()  # grab the pixel data for this frame
                 current_speeds: dict[str, list[float]] = {"Inbound": [], "Outbound": []}
 
-                # r.boxes contains all detections for this frame.
-                # r.boxes.id is None when no tracks exist in this frame.
+                # r.boxes holds all the vehicles found in this frame.
+                # r.boxes.id is empty when nothing was found.
                 if r.boxes.id is not None:
 
-                    # Pull all per-box data off GPU in one batch operation.
-                    # Calling .cpu() inside a per-box loop is significantly slower.
-                    boxes       = r.boxes.xyxy.cpu().numpy()        # [x1,y1,x2,y2]
-                    ids         = r.boxes.id.int().cpu().tolist()   # tracking IDs
-                    clss        = r.boxes.cls.int().cpu().tolist()  # class indices
-                    confidences = r.boxes.conf.cpu().numpy()        # 0.0 – 1.0
+                    # Read all the box data in one go (faster than one by one)
+                    boxes       = r.boxes.xyxy.cpu().numpy()        # corners: x1,y1,x2,y2
+                    ids         = r.boxes.id.int().cpu().tolist()   # tracking ID
+                    clss        = r.boxes.cls.int().cpu().tolist()  # type (car, bus…)
+                    confidences = r.boxes.conf.cpu().numpy()        # how sure the model is
 
                     for box, obj_id, cls, conf in zip(boxes, ids, clss, confidences):
 
                         label = model.names[cls]
 
-                        # Skip non-vehicle detections and low-confidence ones
+                        # Skip if it is not a vehicle type we care about
                         if label not in VEHICLE_CLASSES or conf < MIN_CONFIDENCE:
                             continue
 
-                        # Vertical centre of the bounding box.
-                        # We use the Y axis because most traffic cameras are
-                        # overhead/angled and vehicles primarily move up or down.
+                        # The vertical centre of the bounding box.
+                        # We watch vertical movement because most traffic cameras
+                        # are above the road so cars move up or down in the frame.
                         y_center = (box[1] + box[3]) / 2.0
 
-                        # ── SPEED ESTIMATION ───────────────────────────────────
-                        # Physics:
-                        #   displacement (m) = pixel_delta × PXM
-                        #   speed (m/s)      = displacement × fps
-                        #   speed (km/h)     = speed_ms × 3.6
-                        #
-                        # We only measure vertical displacement (dy) because that
-                        # is the dominant motion axis for overhead camera footage.
+                        # --- SPEED ---
+                        # Compare where the vehicle is now to where it was last frame.
+                        # pixels moved × metres-per-pixel × frames-per-second = metres/sec
+                        # metres/sec × 3.6 = km/h
                         if obj_id in prev_pos:
                             dy        = abs(y_center - prev_pos[obj_id])
                             speed_ms  = dy * PXM * fps
                             speed_kmh = speed_ms * 3.6
                             if speed_kmh > MIN_SPEED_KMH:
+                                # Which half of the frame is the vehicle in?
                                 bucket = "Inbound" if y_center > h / 2 else "Outbound"
                                 current_speeds[bucket].append(speed_kmh)
 
-                        prev_pos[obj_id] = y_center
+                        prev_pos[obj_id] = y_center  # remember position for next frame
 
-                        # ── UNIQUE VEHICLE COUNT ───────────────────────────────
-                        # A vehicle is counted EXACTLY ONCE — the first frame its
-                        # tracking ID appears.  counted_ids prevents any re-count
-                        # even if ByteTrack briefly loses and re-finds the vehicle.
+                        # --- COUNT ---
+                        # Only count the first time we see this ID
                         if obj_id not in counted_ids:
                             counted_ids.add(obj_id)
                             entry_points[obj_id] = y_center
                             final_counts[label] += 1
 
-                        # ── DIRECTION DETECTION ────────────────────────────────
-                        # Compare current Y to the entry Y recorded above.
-                        #   Moving DOWN (increasing Y) → Inbound
-                        #   Moving UP   (decreasing Y) → Outbound
-                        #
-                        # The sentinel lock (99999 / -99999) ensures direction is
-                        # counted ONCE per vehicle, no matter how many frames it
-                        # takes to travel past the threshold.
+                        # --- DIRECTION ---
+                        # Compare current position to where we first saw this vehicle.
+                        # Moving down the frame = Inbound.
+                        # Moving up the frame   = Outbound.
+                        # Once decided, we set a sentinel value so we never count it again.
                         if obj_id in entry_points:
                             ref = entry_points[obj_id]
                             if ref not in (99999, -99999):
                                 if y_center > ref + DIRECTION_THRESHOLD:
                                     direction_counts["Inbound"] += 1
-                                    entry_points[obj_id] = 99999    # locked ↓
+                                    entry_points[obj_id] = 99999   # locked — going in
                                 elif y_center < ref - DIRECTION_THRESHOLD:
                                     direction_counts["Outbound"] += 1
-                                    entry_points[obj_id] = -99999   # locked ↑
+                                    entry_points[obj_id] = -99999  # locked — going out
 
-                        # ── BOUNDING BOX OVERLAY ───────────────────────────────
+                        # --- DRAW BOX ON FRAME ---
                         if st.session_state.config["overlays"]:
                             x1, y1, x2, y2 = map(int, box)
                             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
@@ -533,15 +511,14 @@ elif st.session_state.step == "processing":
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 0), 1,
                             )
 
-                # ── Aggregate per-frame speed samples into running history ─────
+                # Save the average speed for this frame into the history lists
                 for d in ("Inbound", "Outbound"):
                     if current_speeds[d]:
                         speed_history[d].append(float(np.mean(current_speeds[d])))
 
-                # ── HUD BURN-IN ────────────────────────────────────────────────
-                # Draw a semi-transparent dark panel on the right of the frame,
-                # then paint text statistics on top of it.
-                # cv2.addWeighted blends overlay (0.70) with original frame (0.30).
+                # --- DRAW THE INFO PANEL ON THE RIGHT SIDE OF THE FRAME ---
+                # We copy the frame, paint a dark rectangle over the copy,
+                # then mix the two together so it looks semi-transparent.
                 if st.session_state.config["burn"]:
                     sidebar_w = int(w * HUD_WIDTH_RATIO)
                     x_hud     = w - sidebar_w
@@ -549,11 +526,14 @@ elif st.session_state.step == "processing":
                     cv2.rectangle(overlay, (x_hud, 0), (w, h), (0, 0, 0), -1)
                     cv2.addWeighted(overlay, 0.70, frame, 0.30, 0, frame)
 
+                    # Location name at the top
                     cv2.putText(
                         frame, st.session_state.config["loc"].upper(),
                         (x_hud + 10, 35), cv2.FONT_HERSHEY_SIMPLEX,
                         0.55, (255, 255, 255), 1,
                     )
+
+                    # Vehicle counts
                     y_off = 70
                     for obj, val in final_counts.items():
                         cv2.putText(
@@ -563,6 +543,7 @@ elif st.session_state.step == "processing":
                         )
                         y_off += 26
 
+                    # Traffic state labels
                     avg_in  = speed_history["Inbound"][-1]  if speed_history["Inbound"]  else 0.0
                     avg_out = speed_history["Outbound"][-1] if speed_history["Outbound"] else 0.0
                     state_in,  c_in  = get_traffic_state(avg_in)
@@ -586,22 +567,24 @@ elif st.session_state.step == "processing":
                         (x_hud + 10, y_off),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.50, c_out, 2,
                     )
+
+                    # Frame number at the bottom of the panel
                     cv2.putText(
                         frame, f"Frame {i+1}/{max_frames}",
                         (x_hud + 10, h - 12),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.40, (100, 100, 100), 1,
                     )
 
-                out.write(frame)   # write annotated frame to output video
+                out.write(frame)  # add this finished frame to the output video
 
-            # ── Finalise output ────────────────────────────────────────────────
+            # --- Wrap up ---
             out.release()
             progress_bar.progress(1.0)
             frame_info.empty()
 
-            # Re-encode with libx264 so browsers can play the video.
-            # mp4v (MPEG-4 Part 2) is not universally supported in browsers;
-            # H.264 (libx264) is the universal standard.
+            # Convert the video to a format that web browsers can play.
+            # The raw format we wrote (mp4v) does not always work in browsers.
+            # h264 / libx264 works everywhere.
             status.update(label=T["proc_encode"], state="running")
             final_path = _register_tmp(
                 tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
@@ -612,35 +595,36 @@ elif st.session_state.step == "processing":
 
             status.update(label=T["proc_done"], state="complete")
 
-        # Persist results so the UI below survives future Streamlit re-runs
+        # Save everything to session_state so the results section below
+        # can read it even after Streamlit re-runs the script
         st.session_state.speed_history    = speed_history
         st.session_state.final_counts     = final_counts
         st.session_state.direction_counts = direction_counts
         st.session_state.unique_count     = len(counted_ids)
         st.session_state.final_path       = final_path
 
-        # ══════════════════════════════════════════════════════════════════════
-        # RESULTS DISPLAY
-        # ══════════════════════════════════════════════════════════════════════
+        # =====================================================================
+        # RESULTS SCREEN
+        # =====================================================================
 
         st.title(T["results_header"])
         st.divider()
 
-        # ── Top KPI metrics row ────────────────────────────────────────────────
+        # Big number cards across the top
         avg_spd_in  = round(np.mean(speed_history["Inbound"]),  1) if speed_history["Inbound"]  else 0.0
         avg_spd_out = round(np.mean(speed_history["Outbound"]), 1) if speed_history["Outbound"] else 0.0
         total       = sum(final_counts.values())
 
         k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Total vehicles | סה״כ רכבים",        total)
-        k2.metric("Unique IDs | מזהים ייחודיים",         len(counted_ids))
-        k3.metric("Inbound | נכנסים",                    direction_counts["Inbound"])
-        k4.metric("Outbound | יוצאים",                   direction_counts["Outbound"])
-        k5.metric("Avg speed (km/h) | מהירות ממוצעת",   f"{max(avg_spd_in, avg_spd_out):.1f}")
+        k1.metric("Total vehicles | סה״כ רכבים",       total)
+        k2.metric("Unique IDs | מזהים ייחודיים",        len(counted_ids))
+        k3.metric("Coming in | נכנסים",                 direction_counts["Inbound"])
+        k4.metric("Going out | יוצאים",                 direction_counts["Outbound"])
+        k5.metric("Avg speed (km/h) | מהירות ממוצעת",  f"{max(avg_spd_in, avg_spd_out):.1f}")
 
         st.divider()
 
-        # ── Video + downloads + chart ──────────────────────────────────────────
+        # Video on the left, chart and breakdown on the right
         col_left, col_right = st.columns([3, 2], gap="large")
 
         with col_left:
@@ -656,6 +640,7 @@ elif st.session_state.step == "processing":
                         use_container_width=True,
                     )
             with dl2:
+                # Build a simple table and export it as a CSV file
                 df_report = pd.DataFrame({
                     "Category | קטגוריה": (
                         list(final_counts.keys()) + ["Inbound", "Outbound"]
@@ -691,7 +676,7 @@ elif st.session_state.step == "processing":
             st.divider()
             st.button(T["new_analysis"], on_click=reset_app, use_container_width=True)
 
-        # ── Sidebar telemetry ──────────────────────────────────────────────────
+        # Live numbers in the sidebar
         if st.session_state.config["sidebar"]:
             avg_in  = speed_history["Inbound"][-1]  if speed_history["Inbound"]  else 0.0
             avg_out = speed_history["Outbound"][-1] if speed_history["Outbound"] else 0.0
