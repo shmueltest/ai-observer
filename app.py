@@ -229,9 +229,11 @@ elif st.session_state.step == "processing":
             st.bar_chart(df.set_index('Vehicle'))
 
         if st.session_state.config['sidebar']:
-            st.sidebar.metric("Unique IDs", len(tracked_ids))
+            st.sidebar.metric("Total Vehicles", sum(final_counts.values()))
             st.sidebar.metric("Inbound", direction_counts["Inbound"])
             st.sidebar.metric("Outbound", direction_counts["Outbound"])
+            st.sidebar.metric("Tracker IDs", len(tracked_ids))
+            st.sidebar.metric("Counted Ids", len(counted_ids))
 
         st.button("🔄 Reset", on_click=reset_app)
 
