@@ -420,13 +420,13 @@ elif st.session_state.step == "processing":
             # model.track() gives us one frame at a time.
             # persist=True  → keeps the same ID on the same vehicle across frames.
             # stream=True   → does not load the whole video into memory at once.
-            # imgsz=320     → shrinks each frame to 320px before the AI looks at it (faster).
+            # imgsz=480     → shrinks each frame to 480px before the AI looks at it (faster).
             # conf=          → skip detections the model is not sure about.
             results = model.track(
                 source=st.session_state.video_path,
                 stream=True,
                 persist=True,
-                imgsz=320,
+                imgsz=480,
                 conf=MIN_CONFIDENCE,
             )
 
