@@ -536,15 +536,55 @@ elif st.session_state.step == "processing":
                                     direction_counts["Outbound"] += 1
                                     entry_points[obj_id] = -99999  # locked — going out
 
-                        # --- DRAW BOX ON FRAME ---
+                        # --- DRAW BOX AND LABEL ON FRAME ---
                         if st.session_state.config["overlays"]:
                             x1, y1, x2, y2 = map(int, box)
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
-                            cv2.putText(
+
+                            # Each vehicle class gets its own colour.
+                            # These are BGR values (OpenCV uses BGR not RGB).
+                            class_color = {
+                                "car":        (165, 202, 93),   # teal-green
+                                "truck":      (39,  159, 239),  # amber-blue
+                                "bus":        (235, 183, 133),  # light blue
+                                "motorcycle": (177, 147, 211),  # pink-purple
+                            }.get(label, (200, 200, 200))
+
+                            # Thin white rectangle — cleaner than a thick coloured one
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (220, 220, 220), 1)
+
+                            # Coloured corner ticks — the class colour appears as small
+                            # L-shaped marks at each corner of the box.
+                            # This looks much more polished than colouring the whole rect.
+                            tk = max(8, min(16, (x2 - x1) // 5))  # tick length scales with box size
+                            for cx, cy, dx, dy in [
+                                (x1, y1,  1,  1), (x2, y1, -1,  1),
+                                (x1, y2,  1, -1), (x2, y2, -1, -1),
+                            ]:
+                                cv2.line(frame, (cx, cy), (cx + dx * tk, cy), class_color, 2)
+                                cv2.line(frame, (cx, cy), (cx, cy + dy * tk), class_color, 2)
+
+                            # Filled pill label attached to the top-left corner of the box.
+                            # Shows: class name  |  tracking ID  |  confidence %
+                            pill_text = f"{label}  #{obj_id}  {int(conf * 100)}%"
+                            font      = cv2.FONT_HERSHEY_SIMPLEX
+                            font_scale = 0.38
+                            thickness  = 1
+                            (tw, th), baseline = cv2.getTextSize(pill_text, font, font_scale, thickness)
+                            pad    = 4
+                            pill_x = x1
+                            pill_y = max(y1 - th - pad * 2 - 2, 0)  # sit just above the box
+                            # Draw filled rounded rectangle background for the pill
+                            cv2.rectangle(
                                 frame,
-                                f"{label} #{obj_id} {int(conf * 100)}%",
-                                (x1, max(y1 - 8, 10)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 0), 1,
+                                (pill_x, pill_y),
+                                (pill_x + tw + pad * 2, pill_y + th + pad * 2),
+                                class_color, -1,
+                            )
+                            # Dark text on the coloured background
+                            cv2.putText(
+                                frame, pill_text,
+                                (pill_x + pad, pill_y + th + pad),
+                                font, font_scale, (20, 20, 20), thickness, cv2.LINE_AA,
                             )
 
                 # Save the average speed for this frame into the history lists
@@ -552,74 +592,106 @@ elif st.session_state.step == "processing":
                     if current_speeds[d]:
                         speed_history[d].append(float(np.mean(current_speeds[d])))
 
-                # --- DRAW THE INFO PANEL ON THE RIGHT SIDE OF THE FRAME ---
-                # We copy the frame, paint a dark rectangle over the copy,
-                # then mix the two together so it looks semi-transparent.
+                # --- DRAW HUD, COUNT ZONE LINES, AND TIMECODE ---
                 if st.session_state.config["burn"]:
-                    # Draw the counting zone lines first (behind the HUD panel).
-                    # The two dashed yellow lines show where counting starts and stops.
-                    # Vehicles that only appear above the top line or below the bottom
-                    # line are in the "edge zone" and will not be counted yet.
+
+                    # == COUNT ZONE LINES ==
+                    # Dashed white lines are less aggressive than solid cyan ones.
+                    # We draw them by hand as alternating segments (OpenCV has no
+                    # native dashed-line function).
                     top_line    = int(h * EDGE_BUFFER)
                     bottom_line = int(h * (1 - EDGE_BUFFER))
-                    cv2.line(frame, (0, top_line),    (w, top_line),    (0, 220, 220), 1, cv2.LINE_AA)
-                    cv2.line(frame, (0, bottom_line), (w, bottom_line), (0, 220, 220), 1, cv2.LINE_AA)
-                    cv2.putText(frame, "COUNT ZONE", (8, top_line - 6),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 220, 220), 1)
-                    sidebar_w = int(w * HUD_WIDTH_RATIO)
-                    x_hud     = w - sidebar_w
-                    overlay   = frame.copy()
+                    sidebar_w   = int(w * HUD_WIDTH_RATIO)
+                    x_hud       = w - sidebar_w
+                    dash_len, gap_len = 12, 6
+                    for ly, lbl in [(top_line, "count zone"), (bottom_line, "count zone")]:
+                        x = 0
+                        while x < x_hud:
+                            x_end = min(x + dash_len, x_hud)
+                            cv2.line(frame, (x, ly), (x_end, ly), (200, 200, 200), 1, cv2.LINE_AA)
+                            x += dash_len + gap_len
+                        # Small end-cap label so viewers know what the line is
+                        label_bg_x = x_hud - 82
+                        cv2.rectangle(frame, (label_bg_x - 2, ly - 10), (label_bg_x + 78, ly + 3), (0, 0, 0), -1)
+                        cv2.putText(frame, lbl, (label_bg_x, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 180), 1, cv2.LINE_AA)
+
+                    # == HUD PANEL ==
+                    # Semi-transparent dark panel on the right edge.
+                    overlay = frame.copy()
                     cv2.rectangle(overlay, (x_hud, 0), (w, h), (0, 0, 0), -1)
-                    cv2.addWeighted(overlay, 0.70, frame, 0.30, 0, frame)
+                    cv2.addWeighted(overlay, 0.60, frame, 0.40, 0, frame)
 
-                    # Location name at the top
-                    cv2.putText(
-                        frame, st.session_state.config["loc"].upper(),
-                        (x_hud + 10, 35), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55, (255, 255, 255), 1,
-                    )
+                    # Thin top border line to separate the panel from the video
+                    cv2.line(frame, (x_hud, 0), (x_hud, h), (60, 60, 60), 1)
 
-                    # Vehicle counts
-                    y_off = 70
+                    hx = x_hud + 12   # left margin inside the panel
+                    fy = cv2.FONT_HERSHEY_SIMPLEX
+
+                    # Location label — muted small text, then larger white value
+                    cv2.putText(frame, "location", (hx, 18), fy, 0.32, (120, 120, 120), 1, cv2.LINE_AA)
+                    cv2.putText(frame, st.session_state.config["loc"], (hx, 34), fy, 0.42, (240, 240, 240), 1, cv2.LINE_AA)
+
+                    # Thin divider
+                    cv2.line(frame, (hx, 42), (w - 10, 42), (50, 50, 50), 1)
+
+                    # Vehicle counts — each class gets a coloured left-border bar,
+                    # a muted label, and a bright white number.
+                    count_colors = {
+                        "car":        (165, 202, 93),
+                        "truck":      (39,  159, 239),
+                        "bus":        (235, 183, 133),
+                        "motorcycle": (177, 147, 211),
+                    }
+                    y_off = 58
+                    cv2.putText(frame, "vehicles", (hx, y_off), fy, 0.32, (120, 120, 120), 1, cv2.LINE_AA)
+                    y_off += 16
                     for obj, val in final_counts.items():
-                        cv2.putText(
-                            frame, f"{obj.upper()}: {val}",
-                            (x_hud + 10, y_off),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.50, (180, 200, 255), 1,
-                        )
-                        y_off += 26
+                        col = count_colors.get(obj, (180, 180, 180))
+                        # Coloured left-border bar (2px wide, 14px tall)
+                        cv2.rectangle(frame, (hx, y_off - 10), (hx + 2, y_off + 4), col, -1)
+                        # Muted class name
+                        cv2.putText(frame, obj, (hx + 7, y_off), fy, 0.36, (150, 150, 150), 1, cv2.LINE_AA)
+                        # Bright count number on the right
+                        num_str = str(val)
+                        (nw, _), _ = cv2.getTextSize(num_str, fy, 0.45, 1)
+                        cv2.putText(frame, num_str, (w - 14 - nw, y_off), fy, 0.45, (240, 240, 240), 1, cv2.LINE_AA)
+                        y_off += 22
 
-                    # Traffic state labels
+                    # Divider
+                    cv2.line(frame, (hx, y_off + 2), (w - 10, y_off + 2), (50, 50, 50), 1)
+                    y_off += 16
+
+                    # Traffic state — filled pill badges for Inbound and Outbound
                     avg_in  = speed_history["Inbound"][-1]  if speed_history["Inbound"]  else 0.0
                     avg_out = speed_history["Outbound"][-1] if speed_history["Outbound"] else 0.0
                     state_in,  c_in  = get_traffic_state(avg_in)
                     state_out, c_out = get_traffic_state(avg_out)
 
-                    y_off += 15
-                    cv2.putText(
-                        frame, "TRAFFIC STATUS",
-                        (x_hud + 10, y_off),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 220, 0), 1,
-                    )
-                    y_off += 28
-                    cv2.putText(
-                        frame, f"IN:  {state_in}",
-                        (x_hud + 10, y_off),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, c_in, 2,
-                    )
-                    y_off += 26
-                    cv2.putText(
-                        frame, f"OUT: {state_out}",
-                        (x_hud + 10, y_off),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, c_out, 2,
-                    )
+                    cv2.putText(frame, "traffic", (hx, y_off), fy, 0.32, (120, 120, 120), 1, cv2.LINE_AA)
+                    y_off += 16
 
-                    # Frame number at the bottom of the panel
-                    cv2.putText(
-                        frame, f"Frame {i+1}/{max_frames}",
-                        (x_hud + 10, h - 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (100, 100, 100), 1,
-                    )
+                    for direction, state, col in [("inbound", state_in, c_in), ("outbound", state_out, c_out)]:
+                        # Muted direction label
+                        cv2.putText(frame, direction, (hx, y_off), fy, 0.33, (130, 130, 130), 1, cv2.LINE_AA)
+                        y_off += 14
+                        # Filled pill badge for the state word
+                        (pw, ph), _ = cv2.getTextSize(state, fy, 0.38, 1)
+                        pad = 4
+                        cv2.rectangle(frame, (hx, y_off - ph - pad), (hx + pw + pad * 2, y_off + pad), col, -1)
+                        cv2.putText(frame, state, (hx + pad, y_off), fy, 0.38, (15, 15, 15), 1, cv2.LINE_AA)
+                        y_off += 22
+
+                    # == TIMECODE — top-left corner ==
+                    # Shows elapsed time as MM:SS, much more useful than a raw frame number.
+                    elapsed_sec = i / fps
+                    mm = int(elapsed_sec // 60)
+                    ss = int(elapsed_sec % 60)
+                    timecode = f"{mm:02d}:{ss:02d}"
+                    (tcw, tch), _ = cv2.getTextSize(timecode, fy, 0.45, 1)
+                    tc_pad = 5
+                    # Small dark pill background behind the timecode
+                    cv2.rectangle(frame, (8 - tc_pad, 8), (8 + tcw + tc_pad, 8 + tch + tc_pad * 2), (0, 0, 0), -1)
+                    cv2.putText(frame, timecode, (8, 8 + tch + tc_pad), fy, 0.45, (220, 220, 220), 1, cv2.LINE_AA)
 
                 out.write(frame)  # add this finished frame to the output video
 
