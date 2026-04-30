@@ -680,7 +680,7 @@ elif st.session_state.step == "processing":
                         (pw, ph), _ = cv2.getTextSize(state, fy, 0.38, 1)
                         pad = 4
                         cv2.rectangle(frame, (hx, y_off - ph - pad), (hx + pw + pad * 2, y_off + pad), col, -1)
-                        cv2.putText(frame, state, (hx + pad, y_off), fy, 0.38, (15, 15, 15), 1, cv2.LINE_AA)
+                        cv2.putText(frame, state, (hx + pad, y_off), fy, 0.38, (95, 95, 95), 1, cv2.LINE_AA)
                         y_off += 22
 
                     # == TIMECODE — top-left corner ==
