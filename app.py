@@ -28,6 +28,8 @@ import streamlit as st        # builds the web UI
 from moviepy import VideoFileClip   # re-encodes the output video
 from ultralytics import YOLO        # the AI model that finds vehicles
 
+from tools import add_cache_button
+add_cache_button()
 
 # =============================================================================
 # SETTINGS
