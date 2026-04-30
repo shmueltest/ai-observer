@@ -28,8 +28,6 @@ import streamlit as st        # builds the web UI
 from moviepy import VideoFileClip   # re-encodes the output video
 from ultralytics import YOLO        # the AI model that finds vehicles
 
-from tools import add_cache_button
-add_cache_button()
 
 # =============================================================================
 # SETTINGS
@@ -56,8 +54,29 @@ HUD_WIDTH_RATIO: float = 0.30
 VEHICLE_CLASSES: tuple[str, ...] = ("car", "bus", "truck", "motorcycle")
 
 # The AI model must be this confident before we trust a detection.
-# Lower = catches more vehicles but also makes more mistakes.
-MIN_CONFIDENCE: float = 0.35
+# Lowered to 0.25 so we catch more vehicles (especially partially visible ones).
+# If you get too many false detections, raise this back toward 0.35–0.40.
+MIN_CONFIDENCE: float = 0.25
+
+# How much two boxes can overlap before we treat them as the same vehicle.
+# 0.45 is looser than the default (0.7), which helps when cars drive side by side
+# and their boxes overlap — the old default would drop one of them.
+IOU_THRESHOLD: float = 0.45
+
+# "Edge buffer" — a strip at the top and bottom of the frame (as a fraction
+# of the frame height) where we do NOT count vehicles.
+# Why: vehicles often flicker in and out at the very edge of the frame.
+# If we count them the moment they appear at the edge, then they disappear
+# and reappear, we count them twice.
+# By only counting vehicles once they have moved into the middle zone,
+# we avoid most of those false double-counts.
+# 0.10 means we ignore the top 10% and bottom 10% of the frame for counting.
+EDGE_BUFFER: float = 0.10
+
+# Image size fed to the AI model (pixels on the longest side).
+# Bigger = the model sees more detail = fewer missed vehicles, but slower.
+# 640 is the standard size and catches significantly more than 320.
+DETECTION_IMGSZ: int = 640
 
 
 # =============================================================================
@@ -68,7 +87,7 @@ MIN_CONFIDENCE: float = 0.35
 T = {
     # App title and authors
     "app_title":        "🚦 Traffic Tracking System | מערכת ניטור תנועה",
-    "authors":          "שמואל קויפמאן וישי גפני | Shmuel Kaufman & Yishai Gafni",
+    "authors":          "שמואל קויפמאן וישי גפני | Shmuel Koyfman & Yishai Gafni",
     "yt_hint":          "📥 Download YouTube videos here | הורדת סרטוני יוטיוב כאן",
 
     # Step 1 — upload screen
@@ -420,14 +439,18 @@ elif st.session_state.step == "processing":
             # model.track() gives us one frame at a time.
             # persist=True  → keeps the same ID on the same vehicle across frames.
             # stream=True   → does not load the whole video into memory at once.
-            # imgsz=480     → shrinks each frame to 480px before the AI looks at it (faster).
+            # imgsz=640     → uses the full standard size so the model sees more detail.
+            #                 This is the biggest single improvement for missed vehicles.
             # conf=          → skip detections the model is not sure about.
+            # iou=           → how much two boxes can overlap before one gets removed.
+            #                 Looser (0.45) helps when cars drive side by side.
             results = model.track(
                 source=st.session_state.video_path,
                 stream=True,
                 persist=True,
-                imgsz=480,
+                imgsz=DETECTION_IMGSZ,
                 conf=MIN_CONFIDENCE,
+                iou=IOU_THRESHOLD,
             )
 
             for i, r in enumerate(results):
@@ -481,11 +504,22 @@ elif st.session_state.step == "processing":
                         prev_pos[obj_id] = y_center  # remember position for next frame
 
                         # --- COUNT ---
-                        # Only count the first time we see this ID
-                        if obj_id not in counted_ids:
+                        # We only count a vehicle once it has moved into the middle
+                        # zone of the frame (past the edge buffer on either side).
+                        # This stops edge-flickering vehicles from being counted twice:
+                        # a vehicle that briefly disappears at the very top or bottom
+                        # and reappears will still be in the edge zone when it returns,
+                        # so it won't trigger a second count.
+                        in_middle_zone = (EDGE_BUFFER * h) < y_center < ((1 - EDGE_BUFFER) * h)
+
+                        if obj_id not in counted_ids and in_middle_zone:
                             counted_ids.add(obj_id)
                             entry_points[obj_id] = y_center
                             final_counts[label] += 1
+                        elif obj_id not in counted_ids:
+                            # Vehicle is at the edge — remember where it is but
+                            # don't count it yet. We'll count it once it moves inward.
+                            entry_points[obj_id] = y_center
 
                         # --- DIRECTION ---
                         # Compare current position to where we first saw this vehicle.
@@ -522,6 +556,16 @@ elif st.session_state.step == "processing":
                 # We copy the frame, paint a dark rectangle over the copy,
                 # then mix the two together so it looks semi-transparent.
                 if st.session_state.config["burn"]:
+                    # Draw the counting zone lines first (behind the HUD panel).
+                    # The two dashed yellow lines show where counting starts and stops.
+                    # Vehicles that only appear above the top line or below the bottom
+                    # line are in the "edge zone" and will not be counted yet.
+                    top_line    = int(h * EDGE_BUFFER)
+                    bottom_line = int(h * (1 - EDGE_BUFFER))
+                    cv2.line(frame, (0, top_line),    (w, top_line),    (0, 220, 220), 1, cv2.LINE_AA)
+                    cv2.line(frame, (0, bottom_line), (w, bottom_line), (0, 220, 220), 1, cv2.LINE_AA)
+                    cv2.putText(frame, "COUNT ZONE", (8, top_line - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 220, 220), 1)
                     sidebar_w = int(w * HUD_WIDTH_RATIO)
                     x_hud     = w - sidebar_w
                     overlay   = frame.copy()
