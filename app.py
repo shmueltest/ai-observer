@@ -89,7 +89,7 @@ DETECTION_IMGSZ: int = 640
 T = {
     # App title and authors
     "app_title":        "🚦 Traffic Tracking System | מערכת ניטור תנועה",
-    "authors":          "שמואל קויפמאן וישי גפני | Shmuel Koyfman & Yishai Gafni",
+    "authors":          "שמואל קויפמאן וישי גפני | Shmuel Kaufman & Yishai Gafni",
     "yt_hint":          "📥 Download YouTube videos here | הורדת סרטוני יוטיוב כאן",
 
     # Step 1 — upload screen
@@ -496,7 +496,7 @@ elif st.session_state.step == "processing":
                         # metres/sec × 3.6 = km/h
                         if obj_id in prev_pos:
                             dy        = abs(y_center - prev_pos[obj_id])
-                            speed_ms  = dy * PXM * fps
+                            speed_ms  = dy * MPX * fps
                             speed_kmh = speed_ms * 3.6
                             if speed_kmh > MIN_SPEED_KMH:
                                 # Which half of the frame is the vehicle in?
@@ -621,7 +621,7 @@ elif st.session_state.step == "processing":
                     # Semi-transparent dark panel on the right edge.
                     overlay = frame.copy()
                     cv2.rectangle(overlay, (x_hud, 0), (w, h), (0, 0, 0), -1)
-                    cv2.addWeighted(overlay, 0.60, frame, 0.40, 0, frame)
+                    cv2.addWeighted(overlay, 0.70, frame, 0.40, 0, frame)
 
                     # Thin top border line to separate the panel from the video
                     cv2.line(frame, (x_hud, 0), (x_hud, h), (60, 60, 60), 1)
@@ -669,8 +669,8 @@ elif st.session_state.step == "processing":
                     state_in,  c_in  = get_traffic_state(avg_in)
                     state_out, c_out = get_traffic_state(avg_out)
 
-                    cv2.putText(frame, "traffic", (hx, y_off), fy, 0.32, (50, 50, 50), 1, cv2.LINE_AA)
-                    y_off += 16
+                    cv2.putText(frame, "traffic", (hx, y_off), fy, 0.32, (120, 120, 1200), 1, cv2.LINE_AA)
+                    y_off += 18
 
                     for direction, state, col in [("inbound", state_in, c_in), ("outbound", state_out, c_out)]:
                         # Muted direction label
