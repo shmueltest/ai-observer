@@ -630,7 +630,7 @@ elif st.session_state.step == "processing":
                     fy = cv2.FONT_HERSHEY_SIMPLEX
 
                     # Location label — muted small text, then larger white value
-                    cv2.putText(frame, "location", (hx, 18), fy, 0.32, (120, 120, 120), 1, cv2.LINE_AA)
+                    cv2.putText(frame, "location", (hx, 18), fy, 0.32, (150, 150, 150), 1, cv2.LINE_AA)
                     cv2.putText(frame, st.session_state.config["loc"], (hx, 34), fy, 0.42, (240, 240, 240), 1, cv2.LINE_AA)
 
                     # Thin divider
@@ -645,14 +645,14 @@ elif st.session_state.step == "processing":
                         "motorcycle": (177, 147, 211),
                     }
                     y_off = 58
-                    cv2.putText(frame, "vehicles", (hx, y_off), fy, 0.32, (150, 150, 150), 1, cv2.LINE_AA)
+                    cv2.putText(frame, "vehicles", (hx, y_off), fy, 0.32, (170, 170, 170), 1, cv2.LINE_AA)
                     y_off += 16
                     for obj, val in final_counts.items():
                         col = count_colors.get(obj, (180, 180, 180))
                         # Coloured left-border bar (2px wide, 14px tall)
                         cv2.rectangle(frame, (hx, y_off - 10), (hx + 2, y_off + 4), col, -1)
                         # Muted class name
-                        cv2.putText(frame, obj, (hx + 7, y_off), fy, 0.36, (150, 150, 150), 1, cv2.LINE_AA)
+                        cv2.putText(frame, obj, (hx + 7, y_off), fy, 0.36, (180, 180, 180), 1, cv2.LINE_AA)
                         # Bright count number on the right
                         num_str = str(val)
                         (nw, _), _ = cv2.getTextSize(num_str, fy, 0.45, 1)
@@ -661,7 +661,7 @@ elif st.session_state.step == "processing":
 
                     # Divider
                     cv2.line(frame, (hx, y_off + 2), (w - 10, y_off + 2), (50, 50, 50), 1)
-                    y_off += 16
+                    y_off += 22
 
                     # Traffic state — filled pill badges for Inbound and Outbound
                     avg_in  = speed_history["Inbound"][-1]  if speed_history["Inbound"]  else 0.0
@@ -674,7 +674,7 @@ elif st.session_state.step == "processing":
 
                     for direction, state, col in [("inbound", state_in, c_in), ("outbound", state_out, c_out)]:
                         # Muted direction label
-                        cv2.putText(frame, direction, (hx, y_off), fy, 0.33, (130, 130, 130), 1, cv2.LINE_AA)
+                        cv2.putText(frame, direction, (hx, y_off), fy, 0.33, (150, 150, 150), 1, cv2.LINE_AA)
                         y_off += 14
                         # Filled pill badge for the state word
                         (pw, ph), _ = cv2.getTextSize(state, fy, 0.38, 1)
