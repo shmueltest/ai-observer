@@ -496,7 +496,7 @@ elif st.session_state.step == "processing":
                         # metres/sec × 3.6 = km/h
                         if obj_id in prev_pos:
                             dy        = abs(y_center - prev_pos[obj_id])
-                            speed_ms  = dy * MPX * fps
+                            speed_ms  = dy * PXM * fps
                             speed_kmh = speed_ms * 3.6
                             if speed_kmh > MIN_SPEED_KMH:
                                 # Which half of the frame is the vehicle in?
