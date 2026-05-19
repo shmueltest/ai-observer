@@ -645,7 +645,7 @@ elif st.session_state.step == "processing":
                         "motorcycle": (177, 147, 211),
                     }
                     y_off = 58
-                    cv2.putText(frame, "vehicles", (hx, y_off), fy, 0.32, (120, 120, 120), 1, cv2.LINE_AA)
+                    cv2.putText(frame, "vehicles", (hx, y_off), fy, 0.32, (150, 150, 150), 1, cv2.LINE_AA)
                     y_off += 16
                     for obj, val in final_counts.items():
                         col = count_colors.get(obj, (180, 180, 180))
@@ -670,7 +670,7 @@ elif st.session_state.step == "processing":
                     state_out, c_out = get_traffic_state(avg_out)
 
                     cv2.putText(frame, "traffic", (hx, y_off), fy, 0.32, (120, 120, 1200), 1, cv2.LINE_AA)
-                    y_off += 18
+                    y_off += 22
 
                     for direction, state, col in [("inbound", state_in, c_in), ("outbound", state_out, c_out)]:
                         # Muted direction label
